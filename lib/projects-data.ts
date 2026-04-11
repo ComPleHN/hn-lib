@@ -138,7 +138,7 @@ export const folders: Folder[] = [
       {
         id: "lucky",
         title: "吃饭抽签",
-        description: "多选餐厅筛选，菜品含品类/权重，方形跑马灯",
+        description: "多选餐厅筛选，菜品均匀随机，方形跑马灯",
         type: "tool",
         tags: ["吃饭", "多选", "转盘"],
         year: "2026",

@@ -5,7 +5,7 @@ import { isToolSlug } from "@/lib/tools-meta"
 import { TOOL_TITLES } from "@/lib/tools-meta"
 
 const HINTS: Record<keyof typeof TOOL_TITLES, string> = {
-    "lucky": "多选餐厅 · 菜品加权抽签 · 方形跑马灯",
+    "lucky": "多选餐厅 · 菜品随机抽 · 方形跑马灯",
     "markdown-editor": "支持实时预览的极简写作工具",
     "image-compressor": "浏览器端图片压缩，保护隐私",
 }
