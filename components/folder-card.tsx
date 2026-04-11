@@ -1,6 +1,6 @@
-"use client"
-
+import Link from "next/link"
 import { Folder, type ProjectType } from "@/lib/projects-data"
+import { folderRoute } from "@/lib/folders-meta"
 import { Gamepad2, Layers, FlaskConical, Wrench, Palette, ChevronRight } from "lucide-react"
 
 const iconMap: Record<ProjectType, React.ComponentType<{ className?: string }>> = {
@@ -29,18 +29,18 @@ const bgColorMap: Record<ProjectType, string> = {
 
 interface FolderCardProps {
   folder: Folder
-  onClick: () => void
 }
 
-export function FolderCard({ folder, onClick }: FolderCardProps) {
+export function FolderCard({ folder }: FolderCardProps) {
   const Icon = iconMap[folder.icon]
   const hoverColor = colorMap[folder.icon]
   const bgHoverColor = bgColorMap[folder.icon]
+  const href = folderRoute(folder.id)
 
   return (
-    <button
-      onClick={onClick}
-      className={`group w-full text-left p-6 rounded-lg border border-border bg-card transition-all duration-300 hover:border-muted-foreground/30 ${bgHoverColor}`}
+    <Link
+      href={href}
+      className={`group block w-full text-left p-6 rounded-lg border border-border bg-card transition-all duration-300 hover:border-muted-foreground/30 ${bgHoverColor}`}
     >
       <div className="flex items-start justify-between">
         <div className={`p-3 rounded-lg bg-secondary transition-colors duration-300 ${bgHoverColor}`}>
@@ -57,6 +57,6 @@ export function FolderCard({ folder, onClick }: FolderCardProps) {
       <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
         <span className="px-2 py-1 rounded bg-secondary">{folder.projects.length} 个项目</span>
       </div>
-    </button>
+    </Link>
   )
 }

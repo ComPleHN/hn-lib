@@ -1,35 +1,41 @@
-"use client"
-
+import Link from "next/link"
 import { ChevronRight, Home } from "lucide-react"
 
-interface BreadcrumbProps {
-  items: { label: string; onClick?: () => void }[]
+export interface BreadcrumbSegment {
+  label: string
+  href?: string
 }
 
-export function Breadcrumb({ items }: BreadcrumbProps) {
+interface BreadcrumbProps {
+  /** 首页之后的片段；首页固定为链到 `/` */
+  segments: BreadcrumbSegment[]
+}
+
+export function Breadcrumb({ segments }: BreadcrumbProps) {
   return (
-    <nav className="flex items-center gap-2 text-sm">
-      <button
-        onClick={items[0]?.onClick}
+    <nav className="flex items-center gap-2 text-sm flex-wrap" aria-label="面包屑">
+      <Link
+        href="/"
         className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
       >
-        <Home className="h-4 w-4" />
-      </button>
-      
-      {items.map((item, index) => (
-        <div key={index} className="flex items-center gap-2">
-          <ChevronRight className="h-4 w-4 text-muted-foreground/50" />
-          {item.onClick ? (
-            <button
-              onClick={item.onClick}
-              className="text-muted-foreground hover:text-foreground transition-colors"
+        <Home className="h-4 w-4 shrink-0" />
+        <span>首页</span>
+      </Link>
+
+      {segments.map((seg, index) => (
+        <span key={`${seg.label}-${index}`} className="flex items-center gap-2 min-w-0">
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" />
+          {seg.href ? (
+            <Link
+              href={seg.href}
+              className="text-muted-foreground hover:text-foreground transition-colors truncate"
             >
-              {item.label}
-            </button>
+              {seg.label}
+            </Link>
           ) : (
-            <span className="text-foreground">{item.label}</span>
+            <span className="text-foreground truncate">{seg.label}</span>
           )}
-        </div>
+        </span>
       ))}
     </nav>
   )
