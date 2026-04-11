@@ -136,6 +136,15 @@ export const folders: Folder[] = [
     description: "提升效率的实用工具",
     projects: [
       {
+        id: "lucky",
+        title: "吃饭抽签",
+        description: "多选餐厅筛选，菜品含品类/权重，方形跑马灯",
+        type: "tool",
+        tags: ["吃饭", "多选", "转盘"],
+        year: "2026",
+        link: "/tools/lucky",
+      },
+      {
         id: "markdown-editor",
         title: "Markdown 编辑器",
         description: "支持实时预览的极简写作工具",

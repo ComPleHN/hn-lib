@@ -3,7 +3,19 @@
 import { useCallback, useMemo, useState } from "react"
 import { cn } from "@/lib/utils"
 import { RotateCcw, Lock, Check } from "lucide-react"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 
+/** 定义颜色方块的样式 */
 const COLOR_DEFS = [
   { id: 0, label: "红", className: "bg-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.45)]" },
   { id: 1, label: "蓝", className: "bg-sky-500 shadow-[0_0_12px_rgba(14,165,233,0.45)]" },
@@ -12,15 +24,21 @@ const COLOR_DEFS = [
   { id: 4, label: "紫", className: "bg-violet-500 shadow-[0_0_12px_rgba(139,92,246,0.45)]" },
 ] as const
 
+/** 颜色方块的 ID */
 type ColorId = (typeof COLOR_DEFS)[number]["id"]
 
+/** 颜色方块的个数 */
 const LEN = 5
+
+/** 最大尝试次数 */
 const MAX_ROUNDS = 12
 
+/** 随机生成一个颜色方块的组合 */
 function randomSolution(): ColorId[] {
   return Array.from({ length: LEN }, () => Math.floor(Math.random() * 5) as ColorId)
 }
 
+/** 计算两个颜色方块组合的精确匹配个数 */
 function countExact(secret: ColorId[], guess: ColorId[]): number {
   let n = 0
   for (let i = 0; i < LEN; i++) {
@@ -29,10 +47,12 @@ function countExact(secret: ColorId[], guess: ColorId[]): number {
   return n
 }
 
+/** 获取颜色方块的样式类名 */
 function colorClass(id: ColorId) {
   return COLOR_DEFS[id].className
 }
 
+/** 颜色方块游戏组件 */
 export function ColorBlocksGame() {
   const [secret, setSecret] = useState<ColorId[]>(() => randomSolution())
   const [rounds, setRounds] = useState<{ guess: ColorId[]; exact: number }[]>([])
@@ -40,10 +60,14 @@ export function ColorBlocksGame() {
   const [selectedPalette, setSelectedPalette] = useState<ColorId>(0)
   const [won, setWon] = useState(false)
 
+  /** 当前输入行是否已填满 */
   const filled = useMemo(() => current.every((c) => c !== null), [current])
+
+  /** 是否已失败 */
   const lost = rounds.length >= MAX_ROUNDS && !won
   const revealed = won || lost
 
+  /** 重置游戏 */
   const reset = useCallback(() => {
     setSecret(randomSolution())
     setRounds([])
@@ -51,6 +75,7 @@ export function ColorBlocksGame() {
     setWon(false)
   }, [])
 
+  /** 填充颜色方块 */
   const paintSlot = (index: number) => {
     if (won || lost) return
     setCurrent((row) => {
@@ -60,6 +85,7 @@ export function ColorBlocksGame() {
     })
   }
 
+  /** 清空当前输入行 */
   const clearCurrentRow = () => {
     if (won || lost) return
     setCurrent(Array(LEN).fill(null))
@@ -161,14 +187,29 @@ export function ColorBlocksGame() {
           >
             清空本行
           </button>
-          <button
-            type="button"
-            onClick={reset}
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-4 py-2.5 text-sm text-secondary-foreground hover:bg-secondary/80"
-          >
-            <RotateCcw className="h-4 w-4" />
-            新一局
-          </button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-4 py-2.5 text-sm text-secondary-foreground hover:bg-secondary/80"
+              >
+                <RotateCcw className="h-4 w-4" />
+                新一局
+              </button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>开始新一局？</AlertDialogTitle>
+                <AlertDialogDescription>
+                  当前进度、尝试记录与隐藏答案都会清空，并随机生成新的密码。
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>取消</AlertDialogCancel>
+                <AlertDialogAction onClick={reset}>确认新一局</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
         {lost ? (
           <p className="text-center text-sm text-amber-400/90">
