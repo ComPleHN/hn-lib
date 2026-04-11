@@ -94,11 +94,11 @@ export const folders: Folder[] = [
     description: "疯狂的想法与技术探索",
     projects: [
       {
-        id: "ai-art",
-        title: "AI 画廊",
-        description: "使用生成式 AI 创作的艺术作品展示",
+        id: "art-gallery",
+        title: "画廊",
+        description: "艺术作品展示",
         type: "experiment",
-        tags: ["AI", "生成艺术", "Stable Diffusion"],
+        tags: ["艺术"],
         year: "2024",
       },
       {
