@@ -21,6 +21,39 @@ export interface Folder {
 
 export const folders: Folder[] = [
   {
+    id: "components",
+    name: "组件库",
+    icon: "component",
+    description: "可复用的 UI 组件集合",
+    projects: [
+      {
+        id: "calendar",
+        title: "日历",
+        description: "可以编辑和拖拽的日历组件",
+        type: "component",
+        tags: ["日历", "拖拽"],
+        year: "2026",
+        link: "/components/calendar",
+      },
+      {
+        id: "data-table",
+        title: "数据表格",
+        description: "高性能虚拟滚动表格，支持排序和筛选",
+        type: "component",
+        tags: ["虚拟化", "TypeScript", "可访问性"],
+        year: "2024",
+      },
+      {
+        id: "color-picker",
+        title: "色彩选择器",
+        description: "支持多种色彩空间的专业取色工具",
+        type: "component",
+        tags: ["Canvas", "色彩理论", "HSL"],
+        year: "2023",
+      },
+    ],
+  },
+  {
     id: "games",
     name: "游戏 Demo",
     icon: "game",
@@ -52,38 +85,6 @@ export const folders: Folder[] = [
         tags: ["Three.js", "物理引擎", "WebGL"],
         year: "2023",
         link: "/games/puzzle-box",
-      },
-    ],
-  },
-  {
-    id: "components",
-    name: "组件库",
-    icon: "component",
-    description: "可复用的 UI 组件集合",
-    projects: [
-      {
-        id: "motion-cards",
-        title: "动效卡片",
-        description: "带有平滑动画的卡片组件，支持手势交互",
-        type: "component",
-        tags: ["Framer Motion", "React", "手势"],
-        year: "2024",
-      },
-      {
-        id: "data-table",
-        title: "数据表格",
-        description: "高性能虚拟滚动表格，支持排序和筛选",
-        type: "component",
-        tags: ["虚拟化", "TypeScript", "可访问性"],
-        year: "2024",
-      },
-      {
-        id: "color-picker",
-        title: "色彩选择器",
-        description: "支持多种色彩空间的专业取色工具",
-        type: "component",
-        tags: ["Canvas", "色彩理论", "HSL"],
-        year: "2023",
       },
     ],
   },
