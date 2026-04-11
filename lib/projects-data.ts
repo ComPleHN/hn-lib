@@ -86,6 +86,15 @@ export const folders: Folder[] = [
         year: "2023",
         link: "/games/puzzle-box",
       },
+      {
+        id: "color-blocks",
+        title: "五色暗码",
+        description: "底部隐藏五色密码，上方摆放猜测，仅提示有几个位置完全正确",
+        type: "game",
+        tags: ["推理", "颜色", "React"],
+        year: "2026",
+        link: "/games/color-blocks",
+      },
     ],
   },
   {
