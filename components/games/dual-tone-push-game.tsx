@@ -12,6 +12,7 @@
  */
 
 import Image from "next/image"
+import Link from "next/link"
 import {
   useCallback,
   useEffect,
@@ -21,6 +22,7 @@ import {
   useState,
 } from "react"
 import {
+  BookOpen,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -28,6 +30,7 @@ import {
   RotateCcw,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 
 /** 地块贴图：白 / 黑 */
 import imgWhiteFloor from "./assets/白色地块.png"
@@ -213,6 +216,7 @@ export function DualTonePushGame({
   const [won, setWon] = useState(false)
   wonRef.current = won
   const [moves, setMoves] = useState(0)
+  const winToastKeyRef = useRef<string | null>(null)
   const [aiHint, setAiHint] = useState<string | null>(null)
   const [aiPlaying, setAiPlaying] = useState(false)
   /** Worker 中求最短路径，避免主线程卡死 */
@@ -220,7 +224,7 @@ export function DualTonePushGame({
   const aiSolveGenRef = useRef(0)
   /** 浏览器中 `setTimeout` 句柄为 number；与 Node `Timeout` 类型区分 */
   const aiTimerRef = useRef<number | null>(null)
-  const tryMoveRef = useRef<(dr: number, dc: number) => void>(() => {})
+  const tryMoveRef = useRef<(dr: number, dc: number) => void>(() => { })
 
   const boardRef = useRef<HTMLDivElement>(null)
   const [gridLayout, setGridLayout] = useState({ cell: 0, gap: 0, pad: 0 })
@@ -258,13 +262,36 @@ export function DualTonePushGame({
     })
   }, [levels, levelParseOptions, levelIndex])
 
+  /** 通关 Sonner toast（按关/步数/位置去重；并校验 isWin，避免切关首帧 won 未清时误弹） */
+  useEffect(() => {
+    if (!won) {
+      winToastKeyRef.current = null
+      return
+    }
+    if (!isWin(cells, boxes)) return
+    const key = `${levelIndex}-${moves}-${player.r}-${player.c}`
+    if (winToastKeyRef.current === key) return
+    winToastKeyRef.current = key
+    const isLast = levelIndex >= levels.length - 1
+    toast.success("恭喜通关！", {
+      description: isLast
+        ? "全部箱子已到达终点。已是最后一关，按 R 或点「重置」再玩，也可切换关卡。"
+        : "全部箱子已到达终点。按 R 或点「重置」再玩，或进入下一关。",
+      duration: 6000,
+    })
+  }, [won, levelIndex, moves, player.r, player.c, levels.length, cells, boxes])
+
   const applyLevelIndex = useCallback(
     (i: number) => {
       if (i < 0 || i >= levels.length) return
+      if (i !== levelIndex) {
+        setWon(false)
+        winToastKeyRef.current = null
+      }
       setLevelIndex(i)
       onLevelIndexChange?.(i)
     },
-    [levels.length, onLevelIndexChange],
+    [levels.length, onLevelIndexChange, levelIndex],
   )
 
   /** 重置当前关：回到地图初始 player/boxes，不切换关卡下标 */
@@ -510,21 +537,6 @@ export function DualTonePushGame({
 
   return (
     <div className="mx-auto max-w-lg space-y-6">
-      {!embedded ? (
-        <p className="text-center text-sm text-muted-foreground leading-relaxed">
-          <strong className="text-foreground">9×9</strong> 为可移动范围，关卡地图仅含这 81
-          格；外围线框为装饰，不参与逻辑。本体默认同色地块可走；<strong className="text-foreground">终点格</strong>与<strong className="text-foreground">转化格</strong>上黑白本体均可踏入。终点与转化格<strong className="text-foreground">外观不分黑白地坪</strong>。
-          异色箱可推，同色箱可叠入但不可推。踩
-          <strong className="text-foreground">转化格</strong>
-          后「武装」：下一步可踏入<strong className="text-foreground">任意色空地块</strong>
-          ；仅落在<strong className="text-foreground">普通黑白地坪且格上无箱</strong>时本体随地坪变色；<strong className="text-foreground">叠入箱格</strong>、<strong className="text-foreground">终点或转化格</strong>上均<strong className="text-foreground">不因武装变色</strong>（可将箱当作路径，例如武装后叠入白格黑箱仍保持原本体色）。
-          箱翻面：箱色 B，离开格 F₁，进入格 F₂；若 B≠F₁ 且 B=F₂ 则翻面。全部箱进终点即胜。
-          扩展见{" "}
-          <code className="text-xs text-foreground">components/games/dual-tone-push/</code>{" "}
-          与 <code className="text-xs text-foreground">levels</code> /{" "}
-          <code className="text-xs text-foreground">levelParseOptions</code>。
-        </p>
-      ) : null}
       {levels[levelIndex]?.description ? (
         <p className="text-center text-xs text-muted-foreground">
           本关：{levels[levelIndex].description}
@@ -570,6 +582,13 @@ export function DualTonePushGame({
         >
           {aiSolving ? "求解中…" : "AI 通关"}
         </button>
+        <Link
+          href="/games/dual-tone-push/help"
+          className="inline-flex items-center gap-2 rounded-none border border-border bg-background px-3 py-2 text-sm font-medium text-foreground hover:bg-muted/80 transition-colors"
+        >
+          <BookOpen className="h-4 w-4 shrink-0" />
+          游戏说明
+        </Link>
       </div>
       {aiHint ? (
         <p className="text-center text-sm text-amber-700 dark:text-amber-400">{aiHint}</p>
@@ -762,20 +781,16 @@ export function DualTonePushGame({
             </div>
             <p className="text-xs leading-relaxed text-muted-foreground px-1">
               {levelIndex >= levels.length - 1
-                ? "已是最后一关；通关后可点「重置」再玩或去上方关卡列表切换。"
+                ? won
+                  ? "已是最后一关：可点「重置」再玩或去上方关卡列表切换。"
+                  : "已是最后一关；通关后可点「重置」再玩或去上方关卡列表切换。"
                 : won
-                  ? "已通关！点「下一关」继续挑战，或「重置」再玩本关。"
+                  ? "可点「下一关」继续，或「重置」再玩本关。"
                   : "通关后可点「下一关」继续；随时可用上方「关卡」切换地图。"}
             </p>
           </div>
         ) : null}
       </div>
-
-      {won ? (
-        <p className="text-center text-base font-medium text-emerald-600 dark:text-emerald-400">
-          全部箱子已到达终点！按 R 或点「重置」再玩一局。
-        </p>
-      ) : null}
 
       <p className="hidden text-center text-xs text-muted-foreground sm:block">
         键盘：方向键 / WASD 移动 · R 重置
