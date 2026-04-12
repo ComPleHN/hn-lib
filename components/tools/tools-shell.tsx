@@ -1,14 +1,18 @@
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
+import { cn } from "@/lib/utils"
 
 export function ToolsShell({
     title,
     children,
     hint,
+    mainClassName,
 }: {
     title: string
     children: React.ReactNode
     hint?: string
+    /** 主内容区额外 class（如 max-w-5xl），与默认 max-w-3xl 合并 */
+    mainClassName?: string
 }) {
     return (
         <div className="min-h-screen bg-background text-foreground">
@@ -24,7 +28,14 @@ export function ToolsShell({
                     <h1 className="text-lg font-medium">{title}</h1>
                 </div>
             </header>
-            <main className="max-w-3xl mx-auto px-4 py-6">{children}</main>
+            <main
+                className={cn(
+                    "mx-auto px-4 py-6",
+                    mainClassName ?? "max-w-3xl",
+                )}
+            >
+                {children}
+            </main>
             {hint ? (
                 <p className="max-w-3xl mx-auto px-4 pb-8 text-xs text-muted-foreground text-center">
                     {hint}

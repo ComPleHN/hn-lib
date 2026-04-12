@@ -119,6 +119,7 @@
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply bg-background text-foreground;
   }
@@ -126,19 +127,24 @@
 
 /* 卡牌对战：受击抖动、闪红、飘字 */
 @keyframes card-battle-shake {
+
   0%,
   100% {
     transform: translateX(0);
   }
+
   12% {
     transform: translateX(-10px) rotate(-1.5deg);
   }
+
   28% {
     transform: translateX(10px) rotate(1.5deg);
   }
+
   44% {
     transform: translateX(-6px);
   }
+
   60% {
     transform: translateX(6px);
   }
@@ -148,9 +154,11 @@
   0% {
     opacity: 0;
   }
-30% {
+
+  30% {
     opacity: 0.55;
   }
+
   100% {
     opacity: 0;
   }
@@ -161,10 +169,12 @@
     opacity: 1;
     transform: translate(-50%, 0) scale(0.85);
   }
+
   25% {
     opacity: 1;
     transform: translate(-50%, -6px) scale(1.08);
   }
+
   100% {
     opacity: 0;
     transform: translate(-50%, -40px) scale(1.2);
@@ -176,6 +186,7 @@
   0% {
     background-position: 0% 50%;
   }
+
   100% {
     background-position: 200% 50%;
   }
@@ -185,12 +196,15 @@
   .animate-lucky-marquee {
     animation: lucky-marquee 2.2s linear infinite;
   }
+
   .animate-card-battle-shake {
     animation: card-battle-shake 0.52s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
   }
+
   .animate-card-battle-flash {
     animation: card-battle-hit-flash 0.42s ease-out forwards;
   }
+
   .animate-card-battle-float {
     animation: card-battle-float 0.85s cubic-bezier(0.22, 1, 0.36, 1) forwards;
   }

@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "verify:levels": "npx --yes tsx components/games/dual-tone-push/verify-levels-script.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

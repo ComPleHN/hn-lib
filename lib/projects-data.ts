@@ -95,6 +95,15 @@ export const folders: Folder[] = [
         year: "2026",
         link: "/games/color-blocks",
       },
+      {
+        id: "dual-tone-push",
+        title: "双色推箱",
+        description: "黑白地块推箱子：异色可推、翻面规则、转化格与终点素材",
+        type: "game",
+        tags: ["推箱子", "黑白", "React"],
+        year: "2026",
+        link: "/games/dual-tone-push",
+      },
     ],
   },
   {
@@ -143,6 +152,15 @@ export const folders: Folder[] = [
         tags: ["吃饭", "多选", "转盘"],
         year: "2026",
         link: "/tools/lucky",
+      },
+      {
+        id: "dual-tone-push-level-editor",
+        title: "双色推箱关卡编辑器",
+        description: "多种地块与实体画格、导出 JSON、当场试玩",
+        type: "tool",
+        tags: ["推箱", "关卡", "JSON"],
+        year: "2026",
+        link: "/tools/dual-tone-push-level-editor",
       },
       {
         id: "markdown-editor",
