@@ -53,7 +53,7 @@ function getWorker(): Worker {
   return worker
 }
 
-const DEFAULT_SOLVE_TIMEOUT_MS = 12000
+const DEFAULT_SOLVE_TIMEOUT_MS = 120000
 
 /**
  * 在后台线程求最短路径，不阻塞主线程 UI。
