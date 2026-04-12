@@ -30,7 +30,16 @@ import {
   RotateCcw,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { toast } from "sonner"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 
 /** 地块贴图：白 / 黑 */
 import imgWhiteFloor from "./assets/白色地块.png"
@@ -216,7 +225,8 @@ export function DualTonePushGame({
   const [won, setWon] = useState(false)
   wonRef.current = won
   const [moves, setMoves] = useState(0)
-  const winToastKeyRef = useRef<string | null>(null)
+  const winNoticeKeyRef = useRef<string | null>(null)
+  const [winDialogOpen, setWinDialogOpen] = useState(false)
   const [aiHint, setAiHint] = useState<string | null>(null)
   const [aiPlaying, setAiPlaying] = useState(false)
   /** Worker 中求最短路径，避免主线程卡死 */
@@ -262,23 +272,18 @@ export function DualTonePushGame({
     })
   }, [levels, levelParseOptions, levelIndex])
 
-  /** 通关 Sonner toast（按关/步数/位置去重；并校验 isWin，避免切关首帧 won 未清时误弹） */
+  /** 通关弹窗（按关/步数/位置去重；并校验 isWin，避免切关首帧 won 未清时误开） */
   useEffect(() => {
     if (!won) {
-      winToastKeyRef.current = null
+      winNoticeKeyRef.current = null
+      setWinDialogOpen(false)
       return
     }
     if (!isWin(cells, boxes)) return
     const key = `${levelIndex}-${moves}-${player.r}-${player.c}`
-    if (winToastKeyRef.current === key) return
-    winToastKeyRef.current = key
-    const isLast = levelIndex >= levels.length - 1
-    toast.success("恭喜通关！", {
-      description: isLast
-        ? "全部箱子已到达终点。已是最后一关，按 R 或点「重置」再玩，也可切换关卡。"
-        : "全部箱子已到达终点。按 R 或点「重置」再玩，或进入下一关。",
-      duration: 6000,
-    })
+    if (winNoticeKeyRef.current === key) return
+    winNoticeKeyRef.current = key
+    setWinDialogOpen(true)
   }, [won, levelIndex, moves, player.r, player.c, levels.length, cells, boxes])
 
   const applyLevelIndex = useCallback(
@@ -286,7 +291,8 @@ export function DualTonePushGame({
       if (i < 0 || i >= levels.length) return
       if (i !== levelIndex) {
         setWon(false)
-        winToastKeyRef.current = null
+        winNoticeKeyRef.current = null
+        setWinDialogOpen(false)
       }
       setLevelIndex(i)
       onLevelIndexChange?.(i)
@@ -535,8 +541,46 @@ export function DualTonePushGame({
     return () => window.removeEventListener("keydown", onKey)
   }, [tryMove, reset, applyLevelIndex, levelIndex])
 
+  const isLastLevel = levelIndex >= levels.length - 1
+
   return (
     <div className="mx-auto max-w-lg space-y-6">
+      <Dialog open={winDialogOpen} onOpenChange={setWinDialogOpen}>
+        <DialogContent showCloseButton className="rounded-none sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>恭喜通关！</DialogTitle>
+            <DialogDescription>
+              {isLastLevel
+                ? "全部箱子已到达终点。已是最后一关，按 R 或点「重置」再玩，也可切换关卡。"
+                : "全部箱子已到达终点。按 R 或点「重置」再玩，或进入下一关。"}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:justify-end">
+            {!isLastLevel ? (
+              <Button
+                type="button"
+                className="rounded-none"
+                onClick={() => {
+                  setWinDialogOpen(false)
+                  applyLevelIndex(levelIndex + 1)
+                }}
+              >
+                下一关
+              </Button>
+            ) : null}
+            <DialogClose asChild>
+              <Button
+                type="button"
+                variant={isLastLevel ? "default" : "outline"}
+                className="rounded-none"
+              >
+                知道了
+              </Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {levels[levelIndex]?.description ? (
         <p className="text-center text-xs text-muted-foreground">
           本关：{levels[levelIndex].description}
