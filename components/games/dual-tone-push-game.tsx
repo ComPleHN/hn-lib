@@ -6,7 +6,7 @@
  * 场地：9×9 格全部为逻辑格（见 dual-tone-push/constants）；外围 CSS 边框仅装饰。
  *
  * 核心规则摘要：
- * - 行走：默认同色地块可走；转化格任意本体色均可踏入；踩转化格「武装」后，下一步可踏入任意色空地块，落地本体色变为该格地坪色。
+ * - 行走：默认同色地块可走；终点格与转化格任意本体色均可踏入；终点/转化格画面统一地坪。踩转化格「武装」后下一步可踏入任意色空地块；仅落在纯黑白且**无箱**地坪时本体随地坪变色；叠入箱格、终点、转化格上均不按地坪武装变色。
  * - 箱：异色可推；同色可叠入一格但不可推；穿越地块时按 B/F₁/F₂ 规则可能翻面。
  * - 胜：每只箱子都在某一终点格上。
  */
@@ -20,7 +20,13 @@ import {
   useRef,
   useState,
 } from "react"
-import { RotateCcw } from "lucide-react"
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  RotateCcw,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 
 /** 地块贴图：白 / 黑 */
@@ -38,11 +44,18 @@ import imgPlayerBlack from "./assets/黑色地块本体.png"
 import {
   DEFAULT_DUAL_TONE_LEVELS,
   DUAL_TONE_GRID_SIZE,
+  dualToneSolutionDirToDelta,
   parseDualToneLevel,
+  shortestSolution,
   type DualToneLevelDef,
+  type DualToneSolutionDir,
   type ParseDualToneOptions,
   type Tone,
 } from "./dual-tone-push"
+import {
+  runShortestSolutionInWorker,
+  terminateDualToneSolverWorker,
+} from "./dual-tone-push/dual-tone-solver-worker-client"
 
 export type { Tone }
 
@@ -65,6 +78,11 @@ type Cell = {
   floor: Tone
   goal: boolean
   converter: boolean
+}
+
+/** 纯黑白地坪格（无终点、无转化）；武装后仅在此类格落地才按地坪变色 */
+function isPlainFloorCell(c: Cell): boolean {
+  return !c.goal && !c.converter
 }
 
 /** 可移动实体：本体与箱子共用结构，tone 为白(0)或黑(1) */
@@ -191,8 +209,18 @@ export function DualTonePushGame({
    * true：下一步走入任意色空地块时允许通行，落地后按该格 floor 更新本体色并清 false。
    */
   const [pendingConverter, setPendingConverter] = useState(false)
+  const wonRef = useRef(false)
   const [won, setWon] = useState(false)
+  wonRef.current = won
   const [moves, setMoves] = useState(0)
+  const [aiHint, setAiHint] = useState<string | null>(null)
+  const [aiPlaying, setAiPlaying] = useState(false)
+  /** Worker 中求最短路径，避免主线程卡死 */
+  const [aiSolving, setAiSolving] = useState(false)
+  const aiSolveGenRef = useRef(0)
+  /** 浏览器中 `setTimeout` 句柄为 number；与 Node `Timeout` 类型区分 */
+  const aiTimerRef = useRef<number | null>(null)
+  const tryMoveRef = useRef<(dr: number, dc: number) => void>(() => {})
 
   const boardRef = useRef<HTMLDivElement>(null)
   const [gridLayout, setGridLayout] = useState({ cell: 0, gap: 0, pad: 0 })
@@ -212,6 +240,13 @@ export function DualTonePushGame({
   /** 换关或换解析选项：整关重置为初始快照 */
   useEffect(() => {
     setTeleport(true)
+    if (aiTimerRef.current !== null) {
+      clearTimeout(aiTimerRef.current)
+      aiTimerRef.current = null
+    }
+    aiSolveGenRef.current++
+    setAiPlaying(false)
+    setAiSolving(false)
     const s = loadSnapshot(levels, levelIndex, levelParseOptions)
     setPlayer({ ...s.player })
     setBoxes(s.boxes.map((b) => ({ ...b })))
@@ -235,6 +270,13 @@ export function DualTonePushGame({
   /** 重置当前关：回到地图初始 player/boxes，不切换关卡下标 */
   const reset = useCallback(() => {
     setTeleport(true)
+    if (aiTimerRef.current !== null) {
+      clearTimeout(aiTimerRef.current)
+      aiTimerRef.current = null
+    }
+    aiSolveGenRef.current++
+    setAiPlaying(false)
+    setAiSolving(false)
     const s = loadSnapshot(levels, levelIndex, levelParseOptions)
     setPlayer({ ...s.player })
     setBoxes(s.boxes.map((b) => ({ ...b })))
@@ -263,13 +305,19 @@ export function DualTonePushGame({
 
       const box = boxesAt(boxes, nr, nc)
 
-      /** 本体落到 nextPlayer 所在格之后：转化格只武装；非转化且已武装则本体 tone = 该格 floor */
+      /**
+       * 本体落到 nextPlayer 所在格之后：转化格只武装；已武装且落在纯黑白「空」地坪则按 floor 变色；
+       * 终点/转化格不变色；叠入箱子所在格时不按地坪变色（箱子可作为路径，如武装后走入白格黑箱叠入仍保持本体色）。
+       */
       const applyLanding = (nextPlayer: Entity, nextBoxes: Entity[]) => {
         const cell = cells[nextPlayer.r][nextPlayer.c]
+        const landingOnBox = boxesAt(nextBoxes, nextPlayer.r, nextPlayer.c) !== undefined
         if (cell.converter) {
           setPendingConverter(true)
         } else if (pendingConverter) {
-          nextPlayer = { ...nextPlayer, tone: cell.floor }
+          if (isPlainFloorCell(cell) && !landingOnBox) {
+            nextPlayer = { ...nextPlayer, tone: cell.floor }
+          }
           setPendingConverter(false)
         }
         setPlayer(nextPlayer)
@@ -283,7 +331,10 @@ export function DualTonePushGame({
         const dest = cells[nr][nc]
         // 转化格：任意本体色均可踏入（不要求与地坪同色）；未武装且非转化：仅同色可走；武装后：可进任意色空地块
         const allowEnter =
-          pendingConverter || dest.floor === player.tone || dest.converter
+          pendingConverter ||
+          dest.floor === player.tone ||
+          dest.converter ||
+          dest.goal
         if (!allowEnter) return
         applyLanding({ ...player, r: nr, c: nc }, boxes)
         return
@@ -315,7 +366,9 @@ export function DualTonePushGame({
       if (landCell.converter) {
         pending = true
       } else if (pending) {
-        p = { ...p, tone: landCell.floor }
+        if (isPlainFloorCell(landCell)) {
+          p = { ...p, tone: landCell.floor }
+        }
         pending = false
       }
       setPendingConverter(pending)
@@ -326,6 +379,104 @@ export function DualTonePushGame({
     },
     [boxes, cells, pendingConverter, player, won],
   )
+
+  tryMoveRef.current = tryMove
+
+  const clearAiTimer = useCallback(() => {
+    if (aiTimerRef.current !== null) {
+      clearTimeout(aiTimerRef.current)
+      aiTimerRef.current = null
+    }
+    setAiPlaying(false)
+  }, [])
+
+  /** AI：优先 Worker；失败或环境不支持时回退主线程（可能短暂卡顿） */
+  const runAiSolve = useCallback(() => {
+    if (won || aiPlaying || aiSolving) return
+    const def = levels[levelIndex]
+    if (!def) return
+    clearAiTimer()
+    const gen = ++aiSolveGenRef.current
+    setAiSolving(true)
+
+    const startPayload = {
+      player,
+      boxes,
+      pending: pendingConverter,
+    } as const
+
+    const solveWithFallback = async (): Promise<DualToneSolutionDir[] | null> => {
+      try {
+        return await runShortestSolutionInWorker({
+          map: def.map,
+          parseOptions: levelParseOptions,
+          start: startPayload,
+        })
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e)
+        if (msg.includes("超时")) throw e instanceof Error ? e : new Error(msg)
+        const parsed = parseDualToneLevel(def.map, levelParseOptions)
+        return shortestSolution(parsed, startPayload)
+      }
+    }
+
+    void solveWithFallback()
+      .then((path) => {
+        if (gen !== aiSolveGenRef.current) return
+        if (path === null) {
+          setAiHint("当前局面无解（或状态与地图不一致）")
+          window.setTimeout(() => setAiHint(null), 3200)
+          return
+        }
+        if (path.length === 0) {
+          setAiHint("已在胜利状态")
+          window.setTimeout(() => setAiHint(null), 2200)
+          return
+        }
+        setAiPlaying(true)
+        const q = path.slice() as DualToneSolutionDir[]
+        const step = () => {
+          if (q.length === 0 || wonRef.current) {
+            clearAiTimer()
+            return
+          }
+          const d = q.shift()!
+          const [dr, dc] = dualToneSolutionDirToDelta(d)
+          tryMoveRef.current(dr, dc)
+          aiTimerRef.current = window.setTimeout(step, 240)
+        }
+        aiTimerRef.current = window.setTimeout(step, 0)
+      })
+      .catch((e: unknown) => {
+        if (gen !== aiSolveGenRef.current) return
+        setAiHint(
+          e instanceof Error ? e.message : "求解失败（可重试或检查控制台）",
+        )
+        window.setTimeout(() => setAiHint(null), 4200)
+      })
+      .finally(() => {
+        if (gen === aiSolveGenRef.current) setAiSolving(false)
+      })
+  }, [
+    aiPlaying,
+    aiSolving,
+    boxes,
+    clearAiTimer,
+    levelIndex,
+    levelParseOptions,
+    levels,
+    pendingConverter,
+    player,
+    won,
+  ])
+
+  useEffect(() => {
+    return () => {
+      if (aiTimerRef.current !== null) clearTimeout(aiTimerRef.current)
+      aiSolveGenRef.current++
+      terminateDualToneSolverWorker()
+    }
+  }, [])
 
   /** 全局键盘：移动 / 重置 / 切关 */
   useEffect(() => {
@@ -362,10 +513,12 @@ export function DualTonePushGame({
       {!embedded ? (
         <p className="text-center text-sm text-muted-foreground leading-relaxed">
           <strong className="text-foreground">9×9</strong> 为可移动范围，关卡地图仅含这 81
-          格；外围线框为装饰，不参与逻辑。本体默认同色地块可走；转化格任意本体色均可踏入。异色箱可推，同色箱可叠入但不可推。踩
+          格；外围线框为装饰，不参与逻辑。本体默认同色地块可走；<strong className="text-foreground">终点格</strong>与<strong className="text-foreground">转化格</strong>上黑白本体均可踏入。终点与转化格<strong className="text-foreground">外观不分黑白地坪</strong>。
+          异色箱可推，同色箱可叠入但不可推。踩
           <strong className="text-foreground">转化格</strong>
           后「武装」：下一步可踏入<strong className="text-foreground">任意色空地块</strong>
-          ，落地本体变为该格地坪色。箱翻面：箱色 B，离开格 F₁，进入格 F₂；若 B≠F₁ 且 B=F₂ 则翻面。全部箱进终点即胜。
+          ；仅落在<strong className="text-foreground">普通黑白地坪且格上无箱</strong>时本体随地坪变色；<strong className="text-foreground">叠入箱格</strong>、<strong className="text-foreground">终点或转化格</strong>上均<strong className="text-foreground">不因武装变色</strong>（可将箱当作路径，例如武装后叠入白格黑箱仍保持原本体色）。
+          箱翻面：箱色 B，离开格 F₁，进入格 F₂；若 B≠F₁ 且 B=F₂ 则翻面。全部箱进终点即胜。
           扩展见{" "}
           <code className="text-xs text-foreground">components/games/dual-tone-push/</code>{" "}
           与 <code className="text-xs text-foreground">levels</code> /{" "}
@@ -408,7 +561,19 @@ export function DualTonePushGame({
           <RotateCcw className="h-4 w-4" />
           重置
         </button>
+        <button
+          type="button"
+          disabled={won || aiPlaying || aiSolving}
+          onClick={runAiSolve}
+          className="inline-flex items-center gap-2 rounded-none border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-muted/80 transition-colors disabled:opacity-45"
+          title="在后台线程求最短路径后自动走（不阻塞界面）"
+        >
+          {aiSolving ? "求解中…" : "AI 通关"}
+        </button>
       </div>
+      {aiHint ? (
+        <p className="text-center text-sm text-amber-700 dark:text-amber-400">{aiHint}</p>
+      ) : null}
 
       {/* 外层：装饰性边框；静态格 + 覆盖层实体（left/top 过渡实现连续滑动） */}
       <div className="mx-auto w-full max-w-[min(100%,380px)] rounded-none border-2 border-zinc-300 bg-zinc-200/90 p-3 shadow-md dark:border-zinc-600 dark:bg-zinc-900/90">
@@ -426,6 +591,8 @@ export function DualTonePushGame({
               const r = Math.floor(i / DUAL_TONE_GRID_SIZE)
               const c = i % DUAL_TONE_GRID_SIZE
               const cell = cells[r][c]
+              /** 终点/转化：画面上统一地坪，不区分 G/H、C/D 下的黑白底 */
+              const floorVis: Tone = cell.goal || cell.converter ? 0 : cell.floor
 
               return (
                 <div
@@ -433,7 +600,7 @@ export function DualTonePushGame({
                   className="relative flex min-h-0 min-w-0 items-center justify-center overflow-hidden rounded-none"
                 >
                   <Image
-                    src={floorImage(cell.floor)}
+                    src={floorImage(floorVis)}
                     alt=""
                     fill
                     className="object-cover"
@@ -473,7 +640,7 @@ export function DualTonePushGame({
                   className={cn(
                     "absolute z-[3]",
                     !teleport &&
-                      "transition-[left,top] duration-[220ms] ease-out motion-reduce:transition-none",
+                    "transition-[left,top] duration-[220ms] ease-out motion-reduce:transition-none",
                   )}
                   style={{
                     left: gridLayout.pad + box.c * (gridLayout.cell + gridLayout.gap),
@@ -497,7 +664,7 @@ export function DualTonePushGame({
                 className={cn(
                   "absolute z-[4]",
                   !teleport &&
-                    "transition-[left,top] duration-[220ms] ease-out motion-reduce:transition-none",
+                  "transition-[left,top] duration-[220ms] ease-out motion-reduce:transition-none",
                 )}
                 style={{
                   left: gridLayout.pad + player.c * (gridLayout.cell + gridLayout.gap),
@@ -521,25 +688,87 @@ export function DualTonePushGame({
         </div>
       </div>
 
-      {/* 小屏方向键，与键盘逻辑一致 */}
-      <div className="flex flex-wrap justify-center gap-2 sm:hidden">
-        {(
-          [
-            ["上", -1, 0],
-            ["下", 1, 0],
-            ["左", 0, -1],
-            ["右", 0, 1],
-          ] as const
-        ).map(([label, dr, dc]) => (
-          <button
-            key={label}
-            type="button"
-            onClick={() => tryMove(dr, dc)}
-            className="rounded-none border border-border bg-secondary px-4 py-2 text-sm"
-          >
-            {label}
-          </button>
-        ))}
+      {/* 小屏：十字方向键 + 多关时上一关 / 下一关 */}
+      <div className="sm:hidden space-y-4">
+        <div
+          className="mx-auto w-[min(100%,220px)] select-none rounded-2xl border border-border bg-card/80 p-3 shadow-sm"
+          aria-label="方向键"
+        >
+          <div className="grid grid-cols-3 grid-rows-3 gap-1.5 p-1">
+            <div className="min-h-11 min-w-11" aria-hidden />
+            <button
+              type="button"
+              onClick={() => tryMove(-1, 0)}
+              className="flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-border bg-secondary text-foreground shadow-sm active:scale-95 touch-manipulation"
+              aria-label="上"
+            >
+              <ChevronUp className="h-7 w-7" strokeWidth={2.5} />
+            </button>
+            <div className="min-h-11 min-w-11" aria-hidden />
+            <button
+              type="button"
+              onClick={() => tryMove(0, -1)}
+              className="flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-border bg-secondary text-foreground shadow-sm active:scale-95 touch-manipulation"
+              aria-label="左"
+            >
+              <ChevronLeft className="h-7 w-7" strokeWidth={2.5} />
+            </button>
+            <div
+              className="mx-auto flex min-h-11 min-w-11 items-center justify-center rounded-lg bg-muted/60"
+              aria-hidden
+            >
+              <span className="h-2 w-2 rounded-full bg-muted-foreground/35" />
+            </div>
+            <button
+              type="button"
+              onClick={() => tryMove(0, 1)}
+              className="flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-border bg-secondary text-foreground shadow-sm active:scale-95 touch-manipulation"
+              aria-label="右"
+            >
+              <ChevronRight className="h-7 w-7" strokeWidth={2.5} />
+            </button>
+            <div className="min-h-11 min-w-11" aria-hidden />
+            <button
+              type="button"
+              onClick={() => tryMove(1, 0)}
+              className="flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-border bg-secondary text-foreground shadow-sm active:scale-95 touch-manipulation"
+              aria-label="下"
+            >
+              <ChevronDown className="h-7 w-7" strokeWidth={2.5} />
+            </button>
+            <div className="min-h-11 min-w-11" aria-hidden />
+          </div>
+        </div>
+
+        {(!embedded || levels.length > 1) ? (
+          <div className="space-y-2 text-center">
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                disabled={levelIndex <= 0}
+                onClick={() => applyLevelIndex(levelIndex - 1)}
+                className="rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-medium text-foreground shadow-sm transition-colors disabled:opacity-40 active:scale-[0.98] touch-manipulation"
+              >
+                上一关
+              </button>
+              <button
+                type="button"
+                disabled={levelIndex >= levels.length - 1}
+                onClick={() => applyLevelIndex(levelIndex + 1)}
+                className="rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-medium text-foreground shadow-sm transition-colors disabled:opacity-40 active:scale-[0.98] touch-manipulation"
+              >
+                下一关
+              </button>
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground px-1">
+              {levelIndex >= levels.length - 1
+                ? "已是最后一关；通关后可点「重置」再玩或去上方关卡列表切换。"
+                : won
+                  ? "已通关！点「下一关」继续挑战，或「重置」再玩本关。"
+                  : "通关后可点「下一关」继续；随时可用上方「关卡」切换地图。"}
+            </p>
+          </div>
+        ) : null}
       </div>
 
       {won ? (
@@ -548,9 +777,13 @@ export function DualTonePushGame({
         </p>
       ) : null}
 
-      <p className="text-center text-xs text-muted-foreground">
+      <p className="hidden text-center text-xs text-muted-foreground sm:block">
         键盘：方向键 / WASD 移动 · R 重置
         {!embedded || levels.length > 1 ? " · [ / ] 上一关 / 下一关" : ""}
+      </p>
+      <p className="text-center text-xs text-muted-foreground sm:hidden">
+        小屏：十字键移动 · 点「重置」重开本关
+        {!embedded || levels.length > 1 ? " · 切换关卡见上或下方「上一关 / 下一关」" : ""}
       </p>
     </div>
   )

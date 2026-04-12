@@ -30,7 +30,17 @@ export {
   mergeDualToneLevels,
 } from "./registry"
 
-export { isParsedLevelSolvable } from "./solver"
+export {
+  dualToneSolutionDirToDelta,
+  isParsedLevelSolvable,
+  shortestSolution,
+  shortestSolutionLength,
+} from "./solver"
+
+export type {
+  DualToneSolutionDir,
+  DualToneSolverStartState,
+} from "./solver"
 
 export {
   dualToneLevelDefToBuiltinTsItem,

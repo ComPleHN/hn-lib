@@ -1,7 +1,7 @@
 "use client"
 
 import Image from "next/image"
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Download, Play, Pencil, Upload } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
@@ -33,22 +33,6 @@ function initialRows(): string[] {
   rows[mid] = line.slice(0, mid) + "P" + line.slice(mid + 1)
   return rows
 }
-
-/** 画笔：与 `DEFAULT_DUAL_TONE_TILE_CHARS` 一致，含中文说明 */
-const BRUSHES: { char: string; label: string }[] = [
-  { char: ".", label: "白地坪" },
-  { char: "#", label: "黑地坪" },
-  { char: "G", label: "白·终点" },
-  { char: "H", label: "黑·终点" },
-  { char: "C", label: "白·转化" },
-  { char: "D", label: "黑·转化" },
-  { char: "P", label: "本体·白" },
-  { char: "Q", label: "本体·黑" },
-  { char: "o", label: "白箱·白格" },
-  { char: "O", label: "白箱·黑格" },
-  { char: "x", label: "黑箱·白格" },
-  { char: "X", label: "黑箱·黑格" },
-]
 
 function rowsToMap(rows: string[]): string {
   return rows.join("\n")
@@ -91,6 +75,72 @@ function charLayers(ch: string): {
 }
 
 /**
+ * 统一画笔：终点/转化按当前格地坪自动写 G|H、C|D；
+ * 箱子仅允许异色（白格黑箱 x、黑格白箱 O），与游戏一致。
+ */
+export type EditorBrushId =
+  | "floor0"
+  | "floor1"
+  | "goal"
+  | "converter"
+  | "player0"
+  | "player1"
+  | "box"
+
+function resolveBrushChar(brushId: EditorBrushId, currentCh: string): string {
+  const L = charLayers(currentCh)
+  switch (brushId) {
+    case "floor0":
+      return "."
+    case "floor1":
+      return "#"
+    case "goal":
+      return L.floor === 0 ? "G" : "H"
+    case "converter":
+      return L.floor === 0 ? "C" : "D"
+    case "player0":
+      return "P"
+    case "player1":
+      return "Q"
+    case "box":
+      return L.floor === 0 ? "x" : "O"
+    default:
+      return currentCh
+  }
+}
+
+const BRUSH_META: {
+  id: EditorBrushId
+  label: string
+  /** 预览用字符（与 resolve 一致） */
+  previewChar: string
+  hint?: string
+}[] = [
+  { id: "floor0", label: "白地坪", previewChar: "." },
+  { id: "floor1", label: "黑地坪", previewChar: "#" },
+  {
+    id: "goal",
+    label: "终点",
+    previewChar: "G",
+    hint: "按格内地坪自动为 G（白）或 H（黑）",
+  },
+  {
+    id: "converter",
+    label: "转化",
+    previewChar: "C",
+    hint: "按格内地坪自动为 C（白）或 D（黑）",
+  },
+  { id: "player0", label: "本体·白", previewChar: "P" },
+  { id: "player1", label: "本体·黑", previewChar: "Q" },
+  {
+    id: "box",
+    label: "箱子",
+    previewChar: "x",
+    hint: "白格放黑箱(x)、黑格放白箱(O)，仅异色",
+  },
+]
+
+/**
  * 与 `DualTonePushGame` 内棋盘同序：地坪 < 终点 < 转化 < 箱 < 本体
  */
 function DualToneCharLayers({
@@ -100,14 +150,14 @@ function DualToneCharLayers({
 }: {
   char: string
   className?: string
-  /** 传给 next/image 的 sizes，随格子大小调整 */
   imageSizes: string
 }) {
   const { floor, goal, converter, player, box } = charLayers(ch)
+  const floorVis: Tone = goal || converter ? 0 : floor
   return (
     <div className={cn("relative flex min-h-0 min-w-0 items-center justify-center", className)}>
       <Image
-        src={floorImageSrc(floor)}
+        src={floorImageSrc(floorVis)}
         alt=""
         fill
         className="object-cover"
@@ -158,12 +208,19 @@ function DualToneCharLayers({
 export function DualTonePushLevelEditor() {
   const [mode, setMode] = useState<"edit" | "play">("edit")
   const [rows, setRows] = useState<string[]>(initialRows)
-  const [brush, setBrush] = useState("P")
+  const [brushId, setBrushId] = useState<EditorBrushId>("player0")
+  const brushIdRef = useRef<EditorBrushId>(brushId)
+  brushIdRef.current = brushId
+
   const [id, setId] = useState("custom-01")
   const [name, setName] = useState("自定义关卡")
   const [description, setDescription] = useState("")
   const [importMsg, setImportMsg] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  /** 按住涂抹：拖拽 / 滑过连续格 */
+  const paintingRef = useRef(false)
+  const lastPaintedRef = useRef<string | null>(null)
 
   const map = useMemo(() => rowsToMap(rows), [rows])
   const validation = useMemo(() => validateMap(map), [map])
@@ -178,14 +235,55 @@ export function DualTonePushLevelEditor() {
     [id, name, description, map],
   )
 
-  const paint = useCallback((r: number, c: number, ch: string) => {
+  const paintCell = useCallback((r: number, c: number) => {
+    const key = `${r},${c}`
+    lastPaintedRef.current = key
     setRows((prev) => {
+      const cur = prev[r]![c]!
+      const nextCh = resolveBrushChar(brushIdRef.current, cur)
+      if (nextCh === cur) return prev
+      const line = prev[r]!
       const next = [...prev]
-      const line = next[r]
-      next[r] = line.slice(0, c) + ch + line.slice(c + 1)
+      next[r] = line.slice(0, c) + nextCh + line.slice(c + 1)
       return next
     })
   }, [])
+
+  const paintCellIfNew = useCallback((r: number, c: number) => {
+    const key = `${r},${c}`
+    if (lastPaintedRef.current === key) return
+    paintCell(r, c)
+  }, [paintCell])
+
+  useEffect(() => {
+    const endPaint = () => {
+      paintingRef.current = false
+      lastPaintedRef.current = null
+    }
+    window.addEventListener("pointerup", endPaint)
+    window.addEventListener("pointercancel", endPaint)
+    return () => {
+      window.removeEventListener("pointerup", endPaint)
+      window.removeEventListener("pointercancel", endPaint)
+    }
+  }, [])
+
+  /** 快速拖拽时 elementFromPoint 补涂 */
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      if (!paintingRef.current) return
+      const el = document.elementFromPoint(e.clientX, e.clientY)
+      const cell = el?.closest?.("[data-editor-cell]")
+      if (!cell) return
+      const r = Number((cell as HTMLElement).dataset.r)
+      const c = Number((cell as HTMLElement).dataset.c)
+      if (Number.isFinite(r) && Number.isFinite(c)) {
+        paintCellIfNew(r, c)
+      }
+    }
+    window.addEventListener("pointermove", onMove)
+    return () => window.removeEventListener("pointermove", onMove)
+  }, [paintCellIfNew])
 
   const exportJson = useCallback(() => {
     if (!validation.ok) return
@@ -266,12 +364,11 @@ export function DualTonePushLevelEditor() {
   return (
     <div className="space-y-8">
       <p className="text-sm text-muted-foreground leading-relaxed">
-        在9×9 格上点选画笔绘制地块、终点、转化格、本体与箱子；棋盘与画笔预览使用与正式游戏相同的贴图，底层字符表与{" "}
-        <code className="text-xs text-foreground">parse.ts</code> 一致。导出为{" "}
-        <code className="text-xs text-foreground">DualToneLevelDef</code>：JSON 字段顺序为 id → name →
-        description（有则输出）→ map，与{" "}
-        <code className="text-xs text-foreground">builtin-levels.ts</code> 一致；亦可导出/复制与内置关相同的
-        TypeScript 对象条目（map 为多行模板字符串并接 <code className="text-xs">.trim()</code>）以便粘贴进数组。
+        9×9 格编辑：单击或<strong className="text-foreground">按住拖拽</strong>
+        涂抹连续格。终点 / 转化在画面上与地坪同色，故各合并为一支笔，按格内
+        <strong className="text-foreground">白/黑地坪</strong>
+        自动写入 G/H、C/D。箱子仅支持异色组合（白格黑箱、黑格白箱），一支「箱子」笔按地坪自动写 x 或 O。导出字符表仍与{" "}
+        <code className="text-xs text-foreground">parse.ts</code> 一致。
       </p>
 
       <div className="flex flex-wrap gap-2 border border-border bg-card/40 p-2">
@@ -338,36 +435,54 @@ export function DualTonePushLevelEditor() {
           <div>
             <p className="mb-2 text-sm font-medium">画笔</p>
             <div className="flex flex-wrap gap-2">
-              {BRUSHES.map((b) => (
+              {BRUSH_META.map((b) => (
                 <button
-                  key={b.char}
+                  key={b.id}
                   type="button"
-                  title={`${b.label}（字符 ${b.char}）`}
-                  onClick={() => setBrush(b.char)}
+                  title={b.hint ? `${b.label}：${b.hint}` : b.label}
+                  onClick={() => setBrushId(b.id)}
                   className={cn(
-                    "inline-flex items-center gap-2 rounded-none border px-2 py-1.5 text-xs transition-colors",
-                    brush === b.char
+                    "inline-flex max-w-[220px] items-start gap-2 rounded-none border px-2 py-1.5 text-left text-xs transition-colors",
+                    brushId === b.id
                       ? "border-foreground bg-secondary"
                       : "border-border bg-card hover:bg-secondary/50",
                   )}
                 >
                   <DualToneCharLayers
-                    char={b.char}
+                    char={b.previewChar}
                     className="h-9 w-9 shrink-0 border border-border/80"
                     imageSizes="36px"
                   />
-                  <span>{b.label}</span>
+                  <span className="min-w-0 leading-snug">
+                    <span className="font-medium">{b.label}</span>
+                    {b.hint ? (
+                      <span className="mt-0.5 block text-[10px] text-muted-foreground">{b.hint}</span>
+                    ) : null}
+                  </span>
                 </button>
               ))}
             </div>
           </div>
 
           <div>
-            <p className="mb-2 text-sm font-medium">地图（点击格子绘制）</p>
+            <p className="mb-2 text-sm font-medium">地图（单击或按住拖拽涂抹）</p>
             <div
-              className="mx-auto grid w-full max-w-md gap-0.5 border border-border p-2 bg-muted/30"
+              className="mx-auto grid w-full max-w-md touch-none gap-0.5 border border-border bg-muted/30 p-2 select-none"
               style={{
                 gridTemplateColumns: `repeat(${DUAL_TONE_GRID_SIZE}, minmax(0, 1fr))`,
+              }}
+              onPointerDown={(e) => {
+                if (e.button !== 0) return
+                e.preventDefault()
+                paintingRef.current = true
+                lastPaintedRef.current = null
+                const t = e.target as HTMLElement
+                const cell = t.closest?.("[data-editor-cell]")
+                if (cell) {
+                  const r = Number((cell as HTMLElement).dataset.r)
+                  const c = Number((cell as HTMLElement).dataset.c)
+                  if (Number.isFinite(r) && Number.isFinite(c)) paintCell(r, c)
+                }
               }}
             >
               {rows.map((row, r) =>
@@ -377,9 +492,14 @@ export function DualTonePushLevelEditor() {
                     <button
                       key={`${r}-${c}`}
                       type="button"
-                      onClick={() => paint(r, c, brush)}
+                      data-editor-cell=""
+                      data-r={r}
+                      data-c={c}
+                      onPointerEnter={() => {
+                        if (paintingRef.current) paintCellIfNew(r, c)
+                      }}
                       className="relative aspect-square min-h-0 min-w-0 overflow-hidden rounded-none border border-border/80 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      aria-label={`第 ${r + 1} 行第 ${c + 1} 列，当前 ${ch}，点击绘制`}
+                      aria-label={`第 ${r + 1} 行第 ${c + 1} 列，当前 ${ch}`}
                     >
                       <DualToneCharLayers
                         char={ch}
@@ -466,11 +586,7 @@ export function DualTonePushLevelEditor() {
         </>
       ) : (
         <div className="space-y-4">
-          <DualTonePushGame
-            key={map}
-            levels={[levelDef]}
-            embedded
-          />
+          <DualTonePushGame key={map} levels={[levelDef]} embedded />
           <button
             type="button"
             onClick={() => setMode("edit")}
