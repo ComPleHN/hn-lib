@@ -667,7 +667,7 @@ export function SheepTilesGame() {
 
       <p className="text-center text-sm text-muted-foreground leading-relaxed">
         点击<strong className="text-foreground">最上层未被压住</strong>
-        的方块；三张相同即消除。底栏最多 {SLOT_MAX} 张。
+        的方块；三张相同即消除。底栏最多 {SLOT_MAX} 张；牌面最下有一行预留空带。
       </p>
 
       <div className="rounded-none bg-muted/40 p-2 shadow-inner [touch-action:manipulation]">
