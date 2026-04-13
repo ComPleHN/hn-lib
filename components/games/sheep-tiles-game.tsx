@@ -3,11 +3,19 @@
 /**
  * 「羊了个羊」式叠层消除：不规则叠层、方形牌面、立体阴影；
  * 难度影响图案种数、牌张数与叠层纵深。
+ *
+ * 性能（尤其移动端）：预计算遮挡集合 O(n²) 每局一次；场上用原生 img + decoding/async；
+ * 小屏/粗指针降阴影与 filter；飞入仅用 transform3d；牌桌 touch-action: manipulation。
  */
 
-import Image from "next/image"
 import type { MouseEvent } from "react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { RotateCcw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SHEEP_TILE_IMAGES } from "./sheep-tiles-assets"
@@ -133,6 +141,16 @@ function isBlocked(tile: BoardTile, others: BoardTile[]): boolean {
   )
 }
 
+/** 每局 board 变更时算一次，避免每张牌在每次 render 里 O(n) 扫全场 */
+function blockedTileIds(board: BoardTile[]): Set<string> {
+  const out = new Set<string>()
+  for (let i = 0; i < board.length; i++) {
+    const t = board[i]!
+    if (isBlocked(t, board)) out.add(t.id)
+  }
+  return out
+}
+
 function resolveBar(bar: number[]): number[] {
   let b = [...bar]
   let changed = true
@@ -211,6 +229,25 @@ function buildBoard(seed: number, difficulty: SheepDifficulty): BoardTile[] {
   return tiles
 }
 
+const SHADOW_PLAY =
+  "0 4px 0 rgba(0,0,0,0.18), 0 14px 20px -6px rgba(0,0,0,0.55), 0 8px 12px -4px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.45)"
+const SHADOW_PLAY_LITE =
+  "0 2px 0 rgba(0,0,0,0.2), 0 6px 10px -2px rgba(0,0,0,0.35)"
+const SHADOW_BLOCKED =
+  "0 2px 0 rgba(0,0,0,0.35), 0 6px 10px -2px rgba(0,0,0,0.55), inset 0 2px 8px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.12)"
+const SHADOW_BLOCKED_LITE =
+  "0 2px 4px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.1)"
+const SHADOW_BAR =
+  "0 3px 0 rgba(0,0,0,0.2), 0 8px 12px -2px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.35)"
+const SHADOW_BAR_LITE =
+  "0 2px 4px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.2)"
+const SHADOW_FLY_END =
+  "0 3px 0 rgba(0,0,0,0.2), 0 10px 16px -4px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.35)"
+const SHADOW_FLY_END_LITE = "0 4px 12px rgba(0,0,0,0.35)"
+const SHADOW_FLY_START =
+  "0 4px 0 rgba(0,0,0,0.18), 0 14px 20px -6px rgba(0,0,0,0.55), 0 8px 12px -4px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.45)"
+const SHADOW_FLY_START_LITE = "0 3px 8px rgba(0,0,0,0.35)"
+
 export function SheepTilesGame() {
   const [difficulty, setDifficulty] = useState<SheepDifficulty>("medium")
   /** 同难度重开时递增，仅在客户端 effect 里发牌，避免 SSR 与客户端随机不一致导致 hydration 报错 */
@@ -238,6 +275,22 @@ export function SheepTilesGame() {
   const flyTimersRef = useRef<
     Map<number, { timer: number; r1: number; r2: number }>
   >(new Map())
+
+  /** 小屏或粗指针：减轻阴影与 filter，降低 GPU 合成成本 */
+  const [liteFx, setLiteFx] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 639px), (pointer: coarse)")
+    const apply = () => setLiteFx(mq.matches)
+    apply()
+    mq.addEventListener("change", apply)
+    return () => mq.removeEventListener("change", apply)
+  }, [])
+
+  const blockedIds = useMemo(() => blockedTileIds(board), [board])
+  const sortedForPaint = useMemo(
+    () => [...board].sort((a, b) => a.z - b.z),
+    [board],
+  )
 
   const clearAllFlyTimers = useCallback(() => {
     flyTimersRef.current.forEach(({ timer, r1, r2 }) => {
@@ -364,7 +417,6 @@ export function SheepTilesGame() {
     [board, bar, status, tryFlushCommits],
   )
 
-  const sortedForPaint = [...board].sort((a, b) => a.z - b.z)
   const cfg = DIFFICULTY[difficulty]
 
   return (
@@ -396,9 +448,9 @@ export function SheepTilesGame() {
         的方块；三张相同即消除。底栏最多 {SLOT_MAX} 张。
       </p>
 
-      <div className="rounded-none border border-border bg-muted/40 p-2 shadow-inner">
+      <div className="rounded-none border border-border bg-muted/40 p-2 shadow-inner [touch-action:manipulation]">
         <div
-          className="relative mx-auto w-full overflow-hidden rounded-lg bg-gradient-to-b from-emerald-950/30 via-muted/20 to-background"
+          className="relative mx-auto w-full overflow-hidden rounded-lg bg-gradient-to-b from-emerald-950/30 via-muted/20 to-background [contain:layout_paint]"
           style={{ aspectRatio: "3 / 4", maxHeight: "min(72vh, 460px)" }}
         >
           {board.length === 0 ? (
@@ -407,8 +459,8 @@ export function SheepTilesGame() {
             </div>
           ) : null}
           {sortedForPaint.map((tile) => {
-            const blocked = isBlocked(tile, board)
-            const src = SHEEP_TILE_IMAGES[tile.kind]
+            const blocked = blockedIds.has(tile.id)
+            const src = SHEEP_TILE_IMAGES[tile.kind]?.src
             return (
               <button
                 key={tile.id}
@@ -417,11 +469,13 @@ export function SheepTilesGame() {
                 onClick={(ev) => pick(tile, ev)}
                 aria-label={`卡片 ${tile.kind + 1}${blocked ? "（被遮挡）" : ""}`}
                 className={cn(
-                  "absolute overflow-hidden rounded-xl transition-[transform,box-shadow,filter] duration-150",
-                  "ring-1 ring-black/15 dark:ring-white/10",
+                  "absolute overflow-hidden rounded-xl ring-1 ring-black/15 dark:ring-white/10",
+                  liteFx ? "" : "transition-transform duration-100",
                   blocked
-                    ? "cursor-not-allowed brightness-[0.58] saturate-[0.72] contrast-[1.02] ring-black/30 dark:ring-white/[0.08]"
-                    : "cursor-pointer",
+                    ? liteFx
+                      ? "cursor-not-allowed opacity-[0.72] ring-black/25"
+                      : "cursor-not-allowed brightness-[0.58] saturate-[0.72] contrast-[1.02] ring-black/30 dark:ring-white/[0.08]"
+                    : "cursor-pointer active:opacity-95",
                   status !== "play" && "pointer-events-none",
                 )}
                 style={{
@@ -432,17 +486,20 @@ export function SheepTilesGame() {
                   zIndex: 20 + tile.z,
                   transform: `rotate(${tile.rot}deg)`,
                   boxShadow: blocked
-                    ? "0 2px 0 rgba(0,0,0,0.35), 0 6px 10px -2px rgba(0,0,0,0.55), inset 0 2px 8px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.12)"
-                    : "0 4px 0 rgba(0,0,0,0.18), 0 14px 20px -6px rgba(0,0,0,0.55), 0 8px 12px -4px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.45)",
+                    ? liteFx
+                      ? SHADOW_BLOCKED_LITE
+                      : SHADOW_BLOCKED
+                    : liteFx
+                      ? SHADOW_PLAY_LITE
+                      : SHADOW_PLAY,
                 }}
               >
                 {src ? (
-                  <Image
+                  <img
                     src={src}
                     alt=""
-                    fill
-                    className="object-cover"
-                    sizes="128px"
+                    className="absolute inset-0 h-full w-full object-cover select-none"
+                    decoding="async"
                     draggable={false}
                   />
                 ) : null}
@@ -467,7 +524,7 @@ export function SheepTilesGame() {
           </button>
         </div>
         <div
-          className="relative flex min-h-[4.75rem] flex-wrap content-start gap-2 rounded-none border-2 border-dashed border-border bg-card/80 p-2"
+          className="relative flex min-h-[4.75rem] flex-wrap content-start gap-2 rounded-none border-2 border-dashed border-border bg-card/80 p-2 [touch-action:manipulation]"
           aria-label="收纳栏"
         >
           {bar.length === 0 ? (
@@ -480,16 +537,14 @@ export function SheepTilesGame() {
               key={`${i}-${kind}`}
               className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg object-cover ring-1 ring-black/15 dark:ring-white/10"
               style={{
-                boxShadow:
-                  "0 3px 0 rgba(0,0,0,0.2), 0 8px 12px -2px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.35)",
+                boxShadow: liteFx ? SHADOW_BAR_LITE : SHADOW_BAR,
               }}
             >
-              <Image
-                src={SHEEP_TILE_IMAGES[kind]!}
+              <img
+                src={SHEEP_TILE_IMAGES[kind]!.src}
                 alt=""
-                fill
-                className="object-cover"
-                sizes="48px"
+                className="absolute inset-0 h-full w-full object-cover select-none"
+                decoding="async"
                 draggable={false}
               />
             </div>
@@ -519,33 +574,45 @@ export function SheepTilesGame() {
       ) : null}
 
       {flights.map((fly) => {
-        const flySrc = SHEEP_TILE_IMAGES[fly.kind]
+        const flySrc = SHEEP_TILE_IMAGES[fly.kind]?.src
         if (!flySrc) return null
+        const dx = fly.to.left - fly.from.left
+        const dy = fly.to.top - fly.from.top
+        const sx = fly.to.width / fly.from.width
+        const sy = fly.to.height / fly.from.height
+        const moving = fly.moving
         return (
           <div
             key={fly.seq}
             className="pointer-events-none fixed overflow-hidden rounded-xl ring-1 ring-black/20 dark:ring-white/15"
             style={{
               zIndex: 10000 + fly.seq,
-              left: fly.moving ? fly.to.left : fly.from.left,
-              top: fly.moving ? fly.to.top : fly.from.top,
-              width: fly.moving ? fly.to.width : fly.from.width,
-              height: fly.moving ? fly.to.height : fly.from.height,
-              transform: `rotate(${fly.moving ? 0 : fly.fromRot}deg)`,
-              transition: fly.moving
-                ? "left 0.38s cubic-bezier(0.22, 1, 0.36, 1), top 0.38s cubic-bezier(0.22, 1, 0.36, 1), width 0.38s cubic-bezier(0.22, 1, 0.36, 1), height 0.38s cubic-bezier(0.22, 1, 0.36, 1), transform 0.38s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.38s ease"
+              left: fly.from.left,
+              top: fly.from.top,
+              width: fly.from.width,
+              height: fly.from.height,
+              transformOrigin: "0 0",
+              transform: moving
+                ? `translate3d(${dx}px, ${dy}px, 0) scale(${sx}, ${sy}) rotate(0deg)`
+                : `translate3d(0,0,0) scale(1,1) rotate(${fly.fromRot}deg)`,
+              transition: moving
+                ? "transform 0.38s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.38s ease"
                 : "none",
-              boxShadow: fly.moving
-                ? "0 3px 0 rgba(0,0,0,0.2), 0 10px 16px -4px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.35)"
-                : "0 4px 0 rgba(0,0,0,0.18), 0 14px 20px -6px rgba(0,0,0,0.55), 0 8px 12px -4px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.45)",
+              willChange: moving ? "transform" : "auto",
+              boxShadow: moving
+                ? liteFx
+                  ? SHADOW_FLY_END_LITE
+                  : SHADOW_FLY_END
+                : liteFx
+                  ? SHADOW_FLY_START_LITE
+                  : SHADOW_FLY_START,
             }}
           >
-            <Image
+            <img
               src={flySrc}
               alt=""
-              fill
-              className="object-cover"
-              sizes="128px"
+              className="absolute inset-0 h-full w-full object-cover select-none"
+              decoding="async"
               draggable={false}
             />
           </div>
