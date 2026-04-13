@@ -28,6 +28,8 @@ const FIELD_WH_RATIO = 3 / 4
 /** 摆牌区相对地图边缘的内缩（百分比），避免贴边 */
 const FIELD_MARGIN_PCT = 5.5
 const SLOT_MAX = 7
+/** 每局「移出」回牌面次数上限 */
+const MOVE_OUT_PER_ROUND = 2
 const FLY_MS = 420
 /** 初始牌面底部多留一行牌高（+少量留白），供移回牌落位且开局即显示空带 */
 const BOTTOM_ROW_RESERVE_EXTRA_PCT = 1.25
@@ -367,6 +369,7 @@ export function SheepTilesGame() {
   const [gameEpoch, setGameEpoch] = useState(0)
   const [board, setBoard] = useState<BoardTile[]>([])
   const [bar, setBar] = useState<number[]>([])
+  const [moveOutLeft, setMoveOutLeft] = useState(MOVE_OUT_PER_ROUND)
   const [status, setStatus] = useState<"play" | "win" | "lose" | "stuck">("play")
   /** 多条飞入动画并行；按 seq（点击顺序）在落地时依次并入底栏 */
   const [flights, setFlights] = useState<
@@ -467,6 +470,7 @@ export function SheepTilesGame() {
     clearAllFlyTimers()
     setBoard(buildBoard(seed, difficulty))
     setBar([])
+    setMoveOutLeft(MOVE_OUT_PER_ROUND)
     setStatus("play")
     setFlights([])
     setReturnFlights([])
@@ -562,6 +566,7 @@ export function SheepTilesGame() {
   /** 移出底栏前三张重新回到牌堆最后一行 */
   const moveBarFrontToDock = useCallback(() => {
     if (status !== "play") return
+    if (moveOutLeft <= 0) return
     if (bar.length < 3) return
     if (flights.length > 0 || returnFlights.length > 0) return
 
@@ -589,6 +594,7 @@ export function SheepTilesGame() {
     if (reduceMotion) {
       setBar((b) => b.slice(3))
       setBoard((b) => [...b, ...pendingTiles])
+      setMoveOutLeft((n) => n - 1)
       setStatus((s) => (s === "stuck" ? "play" : s))
       return
     }
@@ -628,11 +634,13 @@ export function SheepTilesGame() {
       cancelAnimationFrame(r2)
       setReturnFlights([])
       setBoard((b) => [...b, ...pendingTiles])
+      setMoveOutLeft((n) => n - 1)
       setStatus((s) => (s === "stuck" ? "play" : s))
     }, FLY_MS)
     returnFlyTimersRef.current.set(idBase, { timer, r1, r2 })
   }, [
     status,
+    moveOutLeft,
     bar,
     board,
     flights.length,
@@ -667,7 +675,7 @@ export function SheepTilesGame() {
 
       <p className="text-center text-sm text-muted-foreground leading-relaxed">
         点击<strong className="text-foreground">最上层未被压住</strong>
-        的方块；三张相同即消除。底栏最多 {SLOT_MAX} 张；牌面最下有一行预留空带。
+        的方块；三张相同即消除。底栏最多 {SLOT_MAX} 张；牌面最下有一行预留空带。「移出」每局限 {MOVE_OUT_PER_ROUND} 次。
       </p>
 
       <div className="rounded-none bg-muted/40 p-2 shadow-inner [touch-action:manipulation]">
@@ -734,20 +742,36 @@ export function SheepTilesGame() {
             剩余 {board.length} 张 · 底栏 {bar.length}/{SLOT_MAX}
           </span>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              disabled={
-                status !== "play" ||
-                bar.length < 3 ||
-                flights.length > 0 ||
-                returnFlights.length > 0
-              }
-              title="将底栏前三张飞回牌面最底一行（辅助）"
-              onClick={moveBarFrontToDock}
-            >
-              <ArrowUpFromLine className="size-4" />
-              移出
-            </Button>
+            <span className="relative inline-flex">
+              <Button
+                variant="outline"
+                className="pr-5"
+                disabled={
+                  status !== "play" ||
+                  moveOutLeft <= 0 ||
+                  bar.length < 3 ||
+                  flights.length > 0 ||
+                  returnFlights.length > 0
+                }
+                title={`将底栏前三张飞回牌面最底一行（本局还可 ${moveOutLeft} 次）`}
+                aria-label={`移出，剩余次数 ${moveOutLeft}`}
+                onClick={moveBarFrontToDock}
+              >
+                <ArrowUpFromLine className="size-4" />
+                移出
+              </Button>
+              <span
+                className={cn(
+                  "pointer-events-none absolute -right-1 -top-1 flex h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums leading-none",
+                  moveOutLeft > 0
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted-foreground/35 text-muted-foreground",
+                )}
+                aria-hidden
+              >
+                {moveOutLeft}
+              </span>
+            </span>
             <Button variant="outline"
               onClick={reset}
             >
