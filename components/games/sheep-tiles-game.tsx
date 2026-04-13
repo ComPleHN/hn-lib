@@ -91,7 +91,7 @@ const DIFFICULTY: Record<
     hint: "16 种 × 每种 15 张 · 2×2 格随机叠放",
     kinds: 16,
     perKind: 15,
-    cardWPct: 10,
+    cardWPct: 13,
   },
 }
 
