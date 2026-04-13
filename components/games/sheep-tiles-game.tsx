@@ -1,14 +1,13 @@
 "use client"
 
 /**
- * 「羊了个羊」式叠层消除：不规则叠层、方形牌面、立体阴影；
- * 难度影响图案种数、牌张数与叠层纵深。
+ * 叠层消除：一行 = 牌高的一半；牌身占 2 行×2 列（top = margin + rowTop×行高）。
+ * rowTop 差 2 则上下边相接（紧挨）。遮挡：列/行 2 格区间任一行或一列相交即算压住 + z。阴影在盒外。
  *
- * 性能（尤其移动端）：预计算遮挡集合 O(n²) 每局一次；场上用原生 img + decoding/async；
- * 小屏/粗指针降阴影与 filter；飞入仅用 transform3d；牌桌 touch-action: manipulation。
+ * 性能：预计算遮挡；原生 img；小屏轻阴影；飞入 transform3d。
  */
 
-import type { MouseEvent } from "react"
+import type { KeyboardEvent, MouseEvent } from "react"
 import {
   useCallback,
   useEffect,
@@ -24,6 +23,8 @@ const PLAY_W = 100
 const PLAY_H = 100
 /** 场地 width/height（与外层 aspect-ratio 一致），用于把「宽的 %」换算成竖向占位 */
 const FIELD_WH_RATIO = 3 / 4
+/** 摆牌区相对地图边缘的内缩（百分比），避免贴边 */
+const FIELD_MARGIN_PCT = 5.5
 const SLOT_MAX = 7
 const FLY_MS = 420
 
@@ -54,41 +55,35 @@ const DIFFICULTY: Record<
     perKind: number
     /** 单张牌宽度占场地宽度的百分比（方形，竖向按比例换算） */
     cardWPct: number
-    /** 轻微旋转 ±deg，叠层更「乱」 */
-    tiltDeg: number
   }
 > = {
   easy: {
     label: "简单",
-    hint: "4 种 × 每种 3 张，牌面较大",
+    hint: "4 种 × 每种 3 张 · 2×2 格随机叠放",
     kinds: 4,
     perKind: 3,
     cardWPct: 26,
-    tiltDeg: 5,
   },
   medium: {
     label: "标准",
-    hint: "6 种 × 每种 6 张",
+    hint: "6 种 × 每种 6 张 · 2×2 格随机叠放",
     kinds: 6,
     perKind: 6,
     cardWPct: 21,
-    tiltDeg: 6,
   },
   hard: {
     label: "困难",
-    hint: "8 种 × 每种 9 张，牌小层多",
+    hint: "8 种 × 每种 9 张 · 2×2 格随机叠放",
     kinds: 8,
     perKind: 9,
     cardWPct: 17,
-    tiltDeg: 8,
   },
   extreme: {
     label: "极限",
-    hint: "13 种 × 每种 12 张（共 156 张），牌多密集",
+    hint: "13 种 × 每种 12 张 · 2×2 格随机叠放",
     kinds: 13,
     perKind: 12,
     cardWPct: 14,
-    tiltDeg: 10,
   },
 }
 
@@ -100,8 +95,11 @@ type BoardTile = {
   /** 唯一叠放次序，越大越靠上 */
   z: number
   rect: Rect
-  /** 轻微旋转（度） */
+  /** 整齐摆放时为 0；飞入动画仍可读 */
   rot: number
+  /** 2×2 格左上角列/行（行高 = 牌高一半） */
+  colLeft: number
+  rowTop: number
 }
 
 function mulberry32(a: number) {
@@ -127,17 +125,23 @@ function cardHeightPct(cardWPct: number): number {
   return cardWPct * FIELD_WH_RATIO
 }
 
-function rectsOverlap(a: Rect, b: Rect): boolean {
-  const ax2 = a.l + a.w
-  const ay2 = a.t + a.h
-  const bx2 = b.l + b.w
-  const by2 = b.t + b.h
-  return !(ax2 <= b.l || a.l >= bx2 || ay2 <= b.t || a.t >= by2)
+/** 两牌在列方向上的 2 列格区间是否相交 */
+function colSpansOverlap(a: BoardTile, b: BoardTile): boolean {
+  return !(a.colLeft + 1 < b.colLeft || b.colLeft + 1 < a.colLeft)
+}
+
+/** 两牌在行方向上的 2 行格区间是否相交（只压住一行也算压；再隔一整行则无交集） */
+function rowSpansOverlap(a: BoardTile, b: BoardTile): boolean {
+  return !(a.rowTop + 1 < b.rowTop || b.rowTop + 1 < a.rowTop)
 }
 
 function isBlocked(tile: BoardTile, others: BoardTile[]): boolean {
   return others.some(
-    (o) => o.id !== tile.id && o.z > tile.z && rectsOverlap(tile.rect, o.rect),
+    (o) =>
+      o.id !== tile.id &&
+      o.z > tile.z &&
+      colSpansOverlap(o, tile) &&
+      rowSpansOverlap(o, tile),
   )
 }
 
@@ -177,13 +181,18 @@ function resolveBar(bar: number[]): number[] {
 }
 
 /**
- * 不规则叠层：每张牌随机平面位置 + 随机唯一 z 序（0…n-1），形成非网格堆叠。
+ * 每张牌在逻辑上占 2×2 格：格宽 w/2、格高 h/2（与牌面矩形 w×h 一致）。
+ * 左上角落在整格 (gx,gy) 上随机取值；相邻格位会部分重叠，相隔两格则互不重叠。
  */
 function buildBoard(seed: number, difficulty: SheepDifficulty): BoardTile[] {
   const rand = mulberry32(seed)
   const cfg = DIFFICULTY[difficulty]
   const hPct = cardHeightPct(cfg.cardWPct)
-  const margin = 1.5
+  const margin = FIELD_MARGIN_PCT
+  const w = cfg.cardWPct
+  const h = hPct
+  const maxW = PLAY_W - 2 * margin
+  const maxH = PLAY_H - 2 * margin
 
   if (cfg.perKind % 3 !== 0 || cfg.perKind < 3) {
     throw new Error(
@@ -200,53 +209,85 @@ function buildBoard(seed: number, difficulty: SheepDifficulty): BoardTile[] {
     for (let c = 0; c < cfg.perKind; c++) deck.push(k)
   }
   const kinds = shuffle(deck, rand)
-  const n = kinds.length
 
-  const zOrder = shuffle(
-    Array.from({ length: n }, (_, i) => i),
-    rand,
-  )
+  const cellW = w / 2
+  const cellH = h / 2
+  const nxCells = Math.max(2, Math.floor(maxW / cellW))
+  const nyCells = Math.max(2, Math.floor(maxH / cellH))
+  const gxMax = Math.max(0, nxCells - 2)
+  const gyMax = Math.max(0, nyCells - 2)
+
+  const n = kinds.length
+  const zRanks = shuffle([...Array(n).keys()], rand)
 
   const tiles: BoardTile[] = []
   for (let i = 0; i < n; i++) {
-    const w = cfg.cardWPct
-    const h = hPct
-    const maxL = Math.max(0, PLAY_W - w - margin * 2)
-    const maxT = Math.max(0, PLAY_H - h - margin * 2)
-    const l = Math.round((margin + rand() * maxL) * 100) / 100
-    const t = Math.round((margin + rand() * maxT) * 100) / 100
-    const rot =
-      Math.round((rand() - 0.5) * 2 * cfg.tiltDeg * 100) / 100
-
+    const gx = Math.floor(rand() * (gxMax + 1))
+    const gy = Math.floor(rand() * (gyMax + 1))
+    const l = Math.round((margin + gx * cellW) * 100) / 100
+    const t = Math.round((margin + gy * cellH) * 100) / 100
     tiles.push({
       id: `t-${seed}-${i}`,
       kind: kinds[i]!,
-      z: zOrder[i]!,
-      rot,
+      z: zRanks[i]!,
+      rot: 0,
       rect: { l, t, w, h },
+      colLeft: gx,
+      rowTop: gy,
     })
   }
   return tiles
 }
 
+/** 偏下方的「垫起」阴影，立体感 */
 const SHADOW_PLAY =
-  "0 4px 0 rgba(0,0,0,0.18), 0 14px 20px -6px rgba(0,0,0,0.55), 0 8px 12px -4px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.45)"
+  "0 5px 0 rgba(0,0,0,0.12), 0 12px 18px -4px rgba(0,0,0,0.42)"
 const SHADOW_PLAY_LITE =
-  "0 2px 0 rgba(0,0,0,0.2), 0 6px 10px -2px rgba(0,0,0,0.35)"
+  "0 3px 0 rgba(0,0,0,0.14), 0 7px 12px rgba(0,0,0,0.3)"
 const SHADOW_BLOCKED =
-  "0 2px 0 rgba(0,0,0,0.35), 0 6px 10px -2px rgba(0,0,0,0.55), inset 0 2px 8px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.12)"
+  "0 4px 0 rgba(0,0,0,0.18), 0 9px 14px -3px rgba(0,0,0,0.48)"
 const SHADOW_BLOCKED_LITE =
-  "0 2px 4px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.1)"
+  "0 3px 0 rgba(0,0,0,0.16), 0 6px 10px rgba(0,0,0,0.34)"
 const SHADOW_BAR =
-  "0 3px 0 rgba(0,0,0,0.2), 0 8px 12px -2px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.35)"
+  "0 4px 0 rgba(0,0,0,0.14), 0 9px 14px -3px rgba(0,0,0,0.38)"
 const SHADOW_BAR_LITE =
-  "0 2px 4px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.2)"
+  "0 3px 0 rgba(0,0,0,0.12), 0 5px 10px rgba(0,0,0,0.28)"
 const SHADOW_FLY_END =
-  "0 3px 0 rgba(0,0,0,0.2), 0 10px 16px -4px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.35)"
-const SHADOW_FLY_END_LITE = "0 4px 12px rgba(0,0,0,0.35)"
+  "0 4px 0 rgba(0,0,0,0.14), 0 11px 18px -4px rgba(0,0,0,0.45)"
+const SHADOW_FLY_END_LITE =
+  "0 3px 0 rgba(0,0,0,0.12), 0 7px 14px rgba(0,0,0,0.32)"
 const SHADOW_FLY_START =
-  "0 4px 0 rgba(0,0,0,0.18), 0 14px 20px -6px rgba(0,0,0,0.55), 0 8px 12px -4px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.45)"
-const SHADOW_FLY_START_LITE = "0 3px 8px rgba(0,0,0,0.35)"
+  "0 5px 0 rgba(0,0,0,0.12), 0 12px 18px -4px rgba(0,0,0,0.42)"
+const SHADOW_FLY_START_LITE =
+  "0 3px 0 rgba(0,0,0,0.13), 0 7px 12px rgba(0,0,0,0.3)"
+
+/** 牌面、底栏、飞牌共用：同一比例内方框 + cover 铺满；底色须不透明，避免叠牌时半透明混色出「透边」 */
+function SheepTileFace({
+  src,
+  liteFx,
+  blocked = false,
+}: {
+  src: string
+  liteFx: boolean
+  blocked?: boolean
+}) {
+  return (
+    <div className="pointer-events-none absolute overflow-hidden inset-[6%] rounded-lg">
+      <img
+        src={src}
+        alt=""
+        className={cn(
+          "h-full w-full object-cover object-center select-none",
+          blocked &&
+          (liteFx
+            ? "grayscale brightness-[0.35] contrast-[0.9]"
+            : "grayscale brightness-[0.42] contrast-[0.85]"),
+        )}
+        decoding="async"
+      />
+    </div>
+  )
+}
 
 export function SheepTilesGame() {
   const [difficulty, setDifficulty] = useState<SheepDifficulty>("medium")
@@ -360,7 +401,10 @@ export function SheepTilesGame() {
   }, [gameEpoch, flights.length, board.length, bar.length, status])
 
   const pick = useCallback(
-    (tile: BoardTile, e: MouseEvent<HTMLButtonElement>) => {
+    (
+      tile: BoardTile,
+      e: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>,
+    ) => {
       if (status !== "play") return
       if (isBlocked(tile, board)) return
 
@@ -421,7 +465,7 @@ export function SheepTilesGame() {
 
   return (
     <div className="mx-auto w-full max-w-md space-y-4">
-      <div className="space-y-2 rounded-none border border-border bg-card/50 p-3">
+      <div className="space-y-2 rounded-none bg-card/50 p-3">
         <p className="text-xs font-medium text-foreground">难度</p>
         <div className="flex flex-wrap gap-2">
           {(Object.keys(DIFFICULTY) as SheepDifficulty[]).map((d) => (
@@ -430,10 +474,10 @@ export function SheepTilesGame() {
               type="button"
               onClick={() => onDifficultyChange(d)}
               className={cn(
-                "rounded-none border px-3 py-2 text-xs font-medium transition-colors",
+                "rounded-none px-3 py-2 text-xs font-medium transition-colors",
                 difficulty === d
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-border bg-background hover:bg-muted/80",
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-background hover:bg-muted/80",
               )}
             >
               {DIFFICULTY[d].label}
@@ -448,7 +492,7 @@ export function SheepTilesGame() {
         的方块；三张相同即消除。底栏最多 {SLOT_MAX} 张。
       </p>
 
-      <div className="rounded-none border border-border bg-muted/40 p-2 shadow-inner [touch-action:manipulation]">
+      <div className="rounded-none bg-muted/40 p-2 shadow-inner [touch-action:manipulation]">
         <div
           className="relative mx-auto w-full overflow-hidden rounded-lg bg-gradient-to-b from-emerald-950/30 via-muted/20 to-background [contain:layout_paint]"
           style={{ aspectRatio: "3 / 4", maxHeight: "min(72vh, 460px)" }}
@@ -462,20 +506,12 @@ export function SheepTilesGame() {
             const blocked = blockedIds.has(tile.id)
             const src = SHEEP_TILE_IMAGES[tile.kind]?.src
             return (
-              <button
+              <div
                 key={tile.id}
-                type="button"
-                disabled={status !== "play" || blocked}
-                onClick={(ev) => pick(tile, ev)}
                 aria-label={`卡片 ${tile.kind + 1}${blocked ? "（被遮挡）" : ""}`}
                 className={cn(
-                  "absolute overflow-hidden rounded-xl ring-1 ring-black/15 dark:ring-white/10",
+                  "absolute  overflow-visible rounded-xl border-0 aspect-square bg-background outline-none [isolation:isolate]",
                   liteFx ? "" : "transition-transform duration-100",
-                  blocked
-                    ? liteFx
-                      ? "cursor-not-allowed opacity-[0.72] ring-black/25"
-                      : "cursor-not-allowed brightness-[0.58] saturate-[0.72] contrast-[1.02] ring-black/30 dark:ring-white/[0.08]"
-                    : "cursor-pointer active:opacity-95",
                   status !== "play" && "pointer-events-none",
                 )}
                 style={{
@@ -485,25 +521,24 @@ export function SheepTilesGame() {
                   height: `${tile.rect.h}%`,
                   zIndex: 20 + tile.z,
                   transform: `rotate(${tile.rot}deg)`,
-                  boxShadow: blocked
-                    ? liteFx
-                      ? SHADOW_BLOCKED_LITE
-                      : SHADOW_BLOCKED
-                    : liteFx
-                      ? SHADOW_PLAY_LITE
-                      : SHADOW_PLAY,
+
+                }}
+                onClick={(ev) => {
+                  if (status !== "play" || blocked) return
+                  pick(tile, ev)
+                }}
+                onKeyDown={(ev) => {
+                  if (status !== "play" || blocked) return
+                  if (ev.key === "Enter" || ev.key === " ") {
+                    ev.preventDefault()
+                    pick(tile, ev)
+                  }
                 }}
               >
                 {src ? (
-                  <img
-                    src={src}
-                    alt=""
-                    className="absolute inset-0 h-full w-full object-cover select-none"
-                    decoding="async"
-                    draggable={false}
-                  />
+                  <SheepTileFace src={src} liteFx={liteFx} blocked={blocked} />
                 ) : null}
-              </button>
+              </div>
             )
           })}
         </div>
@@ -517,14 +552,14 @@ export function SheepTilesGame() {
           <button
             type="button"
             onClick={reset}
-            className="inline-flex items-center gap-1.5 rounded-none border border-border bg-secondary px-3 py-1.5 text-xs font-medium hover:bg-secondary/80"
+            className="inline-flex items-center gap-1.5 rounded-none bg-secondary px-3 py-1.5 text-xs font-medium hover:bg-secondary/80"
           >
             <RotateCcw className="h-3.5 w-3.5" />
             新开一局
           </button>
         </div>
         <div
-          className="relative flex min-h-[4.75rem] flex-wrap content-start gap-2 rounded-none border-2 border-dashed border-border bg-card/80 p-2 [touch-action:manipulation]"
+          className="relative flex min-h-[4.75rem] flex-wrap content-start gap-2 rounded-none bg-muted/50 p-2 [touch-action:manipulation]"
           aria-label="收纳栏"
         >
           {bar.length === 0 ? (
@@ -535,17 +570,14 @@ export function SheepTilesGame() {
           {bar.map((kind, i) => (
             <div
               key={`${i}-${kind}`}
-              className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg object-cover ring-1 ring-black/15 dark:ring-white/10"
+              className="relative h-12 w-12 shrink-0 overflow-visible rounded-lg bg-card [isolation:isolate]"
               style={{
                 boxShadow: liteFx ? SHADOW_BAR_LITE : SHADOW_BAR,
               }}
             >
-              <img
+              <SheepTileFace
                 src={SHEEP_TILE_IMAGES[kind]!.src}
-                alt=""
-                className="absolute inset-0 h-full w-full object-cover select-none"
-                decoding="async"
-                draggable={false}
+                liteFx={liteFx}
               />
             </div>
           ))}
@@ -584,7 +616,7 @@ export function SheepTilesGame() {
         return (
           <div
             key={fly.seq}
-            className="pointer-events-none fixed overflow-hidden rounded-xl ring-1 ring-black/20 dark:ring-white/15"
+            className="pointer-events-none fixed overflow-visible rounded-xl bg-card [isolation:isolate]"
             style={{
               zIndex: 10000 + fly.seq,
               left: fly.from.left,
@@ -608,13 +640,7 @@ export function SheepTilesGame() {
                   : SHADOW_FLY_START,
             }}
           >
-            <img
-              src={flySrc}
-              alt=""
-              className="absolute inset-0 h-full w-full object-cover select-none"
-              decoding="async"
-              draggable={false}
-            />
+            <SheepTileFace src={flySrc} liteFx={liteFx} />
           </div>
         )
       })}
