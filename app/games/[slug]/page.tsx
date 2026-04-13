@@ -6,6 +6,7 @@ import { CardBattleGame } from "@/components/games/card-battle-game"
 import { PuzzleBoxGame } from "@/components/games/puzzle-box-game"
 import { ColorBlocksGame } from "@/components/games/color-blocks-game"
 import { DualTonePushGame } from "@/components/games/dual-tone-push-game"
+import { SheepTilesGame } from "@/components/games/sheep-tiles-game"
 
 const HINTS: Record<keyof typeof GAME_TITLES, string> = {
   "pixel-adventure": "Canvas 像素风平台跳跃 · 触控与键盘",
@@ -13,6 +14,7 @@ const HINTS: Record<keyof typeof GAME_TITLES, string> = {
   "puzzle-box": "WebGL · 轨道相机与简易刚体反弹",
   "color-blocks": "逻辑推理 · 仅提示「几个位置正确」",
   "dual-tone-push": "9×9 黑白推箱 · 素材格 · 转化与翻面",
+  "sheep-tiles": "叠层选牌 · 三张相同消除 · 底栏 7 格",
 }
 
 export default async function GamePage({
@@ -33,6 +35,7 @@ export default async function GamePage({
       {slug === "puzzle-box" && <PuzzleBoxGame />}
       {slug === "color-blocks" && <ColorBlocksGame />}
       {slug === "dual-tone-push" && <DualTonePushGame />}
+      {slug === "sheep-tiles" && <SheepTilesGame />}
     </GameShell>
   )
 }

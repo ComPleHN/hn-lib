@@ -104,6 +104,15 @@ export const folders: Folder[] = [
         year: "2026",
         link: "/games/dual-tone-push",
       },
+      {
+        id: "sheep-tiles",
+        title: "叠层消消乐",
+        description: "羊了个羊式错位叠牌：只点露出的牌，三张相同消除，底栏七格",
+        type: "game",
+        tags: ["消除", "叠层", "休闲"],
+        year: "2026",
+        link: "/games/sheep-tiles",
+      },
     ],
   },
   {
