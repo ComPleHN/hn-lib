@@ -4,6 +4,7 @@
  * 叠层消除：一行 = 牌高的一半；牌身占 2 行×2 列（top = margin + rowTop×行高）。
  * rowTop 差 2 则上下边相接（紧挨）。遮挡：列/行 2 格区间任一行或一列相交即算压住 + z。阴影在盒外。
  *
+ * 开局底部多渲染一行空带（一行牌高）：随机牌不占用，移回牌落在其上一格网行。
  * 性能：预计算遮挡；原生 img；小屏轻阴影；飞入 transform3d。
  */
 
@@ -15,9 +16,10 @@ import {
   useRef,
   useState,
 } from "react"
-import { RotateCcw } from "lucide-react"
+import { ArrowUpFromLine, RotateCcw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SHEEP_TILE_IMAGES } from "./sheep-tiles-assets"
+import { Button } from "../ui/button"
 
 const PLAY_W = 100
 const PLAY_H = 100
@@ -27,6 +29,12 @@ const FIELD_WH_RATIO = 3 / 4
 const FIELD_MARGIN_PCT = 5.5
 const SLOT_MAX = 7
 const FLY_MS = 420
+/** 初始牌面底部多留一行牌高（+少量留白），供移回牌落位且开局即显示空带 */
+const BOTTOM_ROW_RESERVE_EXTRA_PCT = 1.25
+
+function reservedBottomBandPct(cardHPct: number): number {
+  return cardHPct + BOTTOM_ROW_RESERVE_EXTRA_PCT
+}
 
 type ScreenRect = { left: number; top: number; width: number; height: number }
 
@@ -183,6 +191,7 @@ function resolveBar(bar: number[]): number[] {
 /**
  * 每张牌在逻辑上占 2×2 格：格宽 w/2、格高 h/2（与牌面矩形 w×h 一致）。
  * 左上角落在整格 (gx,gy) 上随机取值；相邻格位会部分重叠，相隔两格则互不重叠。
+ * 底部预留一行牌高，随机牌不摆入该带（与移回牌最底行一致）。
  */
 function buildBoard(seed: number, difficulty: SheepDifficulty): BoardTile[] {
   const rand = mulberry32(seed)
@@ -215,7 +224,15 @@ function buildBoard(seed: number, difficulty: SheepDifficulty): BoardTile[] {
   const nxCells = Math.max(2, Math.floor(maxW / cellW))
   const nyCells = Math.max(2, Math.floor(maxH / cellH))
   const gxMax = Math.max(0, nxCells - 2)
-  const gyMax = Math.max(0, nyCells - 2)
+  const gyMaxFull = Math.max(0, nyCells - 2)
+  const reserveHPct = reservedBottomBandPct(h)
+  const gyMaxSpawn = Math.max(
+    0,
+    Math.min(
+      gyMaxFull,
+      Math.floor((PLAY_H - reserveHPct - margin - h) / cellH + 1e-9),
+    ),
+  )
 
   const n = kinds.length
   const zRanks = shuffle([...Array(n).keys()], rand)
@@ -223,7 +240,7 @@ function buildBoard(seed: number, difficulty: SheepDifficulty): BoardTile[] {
   const tiles: BoardTile[] = []
   for (let i = 0; i < n; i++) {
     const gx = Math.floor(rand() * (gxMax + 1))
-    const gy = Math.floor(rand() * (gyMax + 1))
+    const gy = Math.floor(rand() * (gyMaxSpawn + 1))
     const l = Math.round((margin + gx * cellW) * 100) / 100
     const t = Math.round((margin + gy * cellH) * 100) / 100
     tiles.push({
@@ -237,6 +254,59 @@ function buildBoard(seed: number, difficulty: SheepDifficulty): BoardTile[] {
     })
   }
   return tiles
+}
+
+/** 将底栏移出的三张摆回牌堆最底一行（尽量同一 rowTop 横排，格位与 buildBoard 一致） */
+function layoutReturnRowTiles(cfg: { cardWPct: number }): Array<{
+  colLeft: number
+  rowTop: number
+  rect: Rect
+}> {
+  const margin = FIELD_MARGIN_PCT
+  const w = cfg.cardWPct
+  const h = cardHeightPct(cfg.cardWPct)
+  const cellW = w / 2
+  const cellH = h / 2
+  const maxW = PLAY_W - 2 * margin
+  const maxH = PLAY_H - 2 * margin
+  const nxCells = Math.max(2, Math.floor(maxW / cellW))
+  const nyCells = Math.max(2, Math.floor(maxH / cellH))
+  const gxMax = Math.max(0, nxCells - 2)
+  const gyMax = Math.max(0, nyCells - 2)
+
+  const cell = (
+    gx: number,
+    gy: number,
+  ): { colLeft: number; rowTop: number; rect: Rect } => ({
+    colLeft: gx,
+    rowTop: gy,
+    rect: {
+      l: Math.round((margin + gx * cellW) * 100) / 100,
+      t: Math.round((margin + gy * cellH) * 100) / 100,
+      w,
+      h,
+    },
+  })
+
+  const out: Array<{ colLeft: number; rowTop: number; rect: Rect }> = []
+  if (gxMax >= 4) {
+    const startGx = Math.max(0, Math.floor((gxMax - 4) / 2))
+    for (let i = 0; i < 3; i++) out.push(cell(startGx + i * 2, gyMax))
+  } else if (gxMax >= 2) {
+    out.push(cell(0, gyMax), cell(2, gyMax), cell(0, Math.max(0, gyMax - 1)))
+  } else {
+    for (let i = 0; i < 3; i++) out.push(cell(0, Math.max(0, gyMax - i)))
+  }
+  return out
+}
+
+function boardTileRectToScreen(field: DOMRect, rect: Rect): ScreenRect {
+  return {
+    left: field.left + (field.width * rect.l) / 100,
+    top: field.top + (field.height * rect.t) / 100,
+    width: (field.width * rect.w) / 100,
+    height: (field.height * rect.h) / 100,
+  }
 }
 
 /** 偏下方的「垫起」阴影，立体感 */
@@ -309,7 +379,23 @@ export function SheepTilesGame() {
       moving: boolean
     }>
   >([])
+  /** 底栏牌飞回牌面最底行 */
+  const [returnFlights, setReturnFlights] = useState<
+    Array<{
+      id: number
+      kind: number
+      from: ScreenRect
+      to: ScreenRect
+      moving: boolean
+    }>
+  >([])
   const barDropTargetRef = useRef<HTMLDivElement | null>(null)
+  const playFieldRef = useRef<HTMLDivElement | null>(null)
+  const barCellRefs = useRef<(HTMLDivElement | null)[]>([])
+  const returnFlySeqRef = useRef(0)
+  const returnFlyTimersRef = useRef<
+    Map<number, { timer: number; r1: number; r2: number }>
+  >(new Map())
   const pickSeqRef = useRef(0)
   const nextCommitSeqRef = useRef(1)
   const pendingCommitRef = useRef<Map<number, { kind: number }>>(new Map())
@@ -340,6 +426,12 @@ export function SheepTilesGame() {
       cancelAnimationFrame(r2)
     })
     flyTimersRef.current.clear()
+    returnFlyTimersRef.current.forEach(({ timer, r1, r2 }) => {
+      window.clearTimeout(timer)
+      cancelAnimationFrame(r1)
+      cancelAnimationFrame(r2)
+    })
+    returnFlyTimersRef.current.clear()
   }, [])
 
   const tryFlushCommits = useCallback(() => {
@@ -377,6 +469,7 @@ export function SheepTilesGame() {
     setBar([])
     setStatus("play")
     setFlights([])
+    setReturnFlights([])
     pickSeqRef.current = 0
     nextCommitSeqRef.current = 1
     pendingCommitRef.current.clear()
@@ -394,11 +487,15 @@ export function SheepTilesGame() {
   useEffect(() => {
     if (gameEpoch === 0) return
     if (flights.length > 0) return
+    if (returnFlights.length > 0) return
     if (status !== "play") return
     if (board.length !== 0) return
     if (bar.length === 0) setStatus("win")
     else setStatus("stuck")
-  }, [gameEpoch, flights.length, board.length, bar.length, status])
+  }, [gameEpoch, flights.length, returnFlights.length, board.length, bar.length, status])
+
+  const cfg = DIFFICULTY[difficulty]
+  const reservedBandPct = reservedBottomBandPct(cardHeightPct(cfg.cardWPct))
 
   const pick = useCallback(
     (
@@ -406,6 +503,7 @@ export function SheepTilesGame() {
       e: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>,
     ) => {
       if (status !== "play") return
+      if (returnFlights.length > 0) return
       if (isBlocked(tile, board)) return
 
       const dropEl = barDropTargetRef.current
@@ -458,10 +556,90 @@ export function SheepTilesGame() {
       }, FLY_MS)
       flyTimersRef.current.set(seq, { timer, r1, r2 })
     },
-    [board, bar, status, tryFlushCommits],
+    [board, bar, status, tryFlushCommits, returnFlights.length],
   )
 
-  const cfg = DIFFICULTY[difficulty]
+  /** 移出底栏前三张重新回到牌堆最后一行 */
+  const moveBarFrontToDock = useCallback(() => {
+    if (status !== "play") return
+    if (bar.length < 3) return
+    if (flights.length > 0 || returnFlights.length > 0) return
+
+    const kinds = bar.slice(0, 3)
+    const cells = layoutReturnRowTiles(cfg)
+    const baseZ = board.reduce((m, t) => Math.max(m, t.z), 0) + 1
+    const idBatch = ++returnFlySeqRef.current
+    const pendingTiles: BoardTile[] = kinds.map((kind, i) => {
+      const c = cells[i]!
+      return {
+        id: `ret-${roundKey}-${idBatch}-${i}-${kind}`,
+        kind,
+        z: baseZ + i,
+        rot: 0,
+        rect: c.rect,
+        colLeft: c.colLeft,
+        rowTop: c.rowTop,
+      }
+    })
+
+    const reduceMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+
+    if (reduceMotion) {
+      setBar((b) => b.slice(3))
+      setBoard((b) => [...b, ...pendingTiles])
+      setStatus((s) => (s === "stuck" ? "play" : s))
+      return
+    }
+
+    const fromRects: ScreenRect[] = []
+    for (let i = 0; i < 3; i++) {
+      const el = barCellRefs.current[i]
+      if (!el) return
+      fromRects.push(pickScreenRect(el.getBoundingClientRect()))
+    }
+    const field = playFieldRef.current
+    if (!field) return
+    const fr = field.getBoundingClientRect()
+    const toRects = pendingTiles.map((t) => boardTileRectToScreen(fr, t.rect))
+
+    setBar((b) => b.slice(3))
+    const idBase = idBatch
+    setReturnFlights(
+      kinds.map((kind, i) => ({
+        id: idBase * 10 + i,
+        kind,
+        from: fromRects[i]!,
+        to: toRects[i]!,
+        moving: false,
+      })),
+    )
+
+    let r2 = 0
+    const r1 = requestAnimationFrame(() => {
+      r2 = requestAnimationFrame(() => {
+        setReturnFlights((prev) => prev.map((f) => ({ ...f, moving: true })))
+      })
+    })
+    const timer = window.setTimeout(() => {
+      returnFlyTimersRef.current.delete(idBase)
+      cancelAnimationFrame(r1)
+      cancelAnimationFrame(r2)
+      setReturnFlights([])
+      setBoard((b) => [...b, ...pendingTiles])
+      setStatus((s) => (s === "stuck" ? "play" : s))
+    }, FLY_MS)
+    returnFlyTimersRef.current.set(idBase, { timer, r1, r2 })
+  }, [
+    status,
+    bar,
+    board,
+    flights.length,
+    returnFlights.length,
+    cfg,
+    roundKey,
+  ])
 
   return (
     <div className="mx-auto w-full max-w-md space-y-4">
@@ -494,6 +672,7 @@ export function SheepTilesGame() {
 
       <div className="rounded-none bg-muted/40 p-2 shadow-inner [touch-action:manipulation]">
         <div
+          ref={playFieldRef}
           className="relative mx-auto w-full overflow-hidden rounded-lg bg-gradient-to-b from-emerald-950/30 via-muted/20 to-background [contain:layout_paint]"
           style={{ aspectRatio: "3 / 4", maxHeight: "min(72vh, 460px)" }}
         >
@@ -541,22 +720,42 @@ export function SheepTilesGame() {
               </div>
             )
           })}
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 z-[18] border-t border-dashed border-muted-foreground/30 bg-muted/15"
+            style={{ height: `${reservedBandPct}%` }}
+            aria-hidden
+          />
         </div>
       </div>
 
       <div className="space-y-2">
-        <div className="flex items-center justify-between px-1">
+        <div className="flex items-center justify-between gap-2 px-1">
           <span className="text-xs text-muted-foreground">
             剩余 {board.length} 张 · 底栏 {bar.length}/{SLOT_MAX}
           </span>
-          <button
-            type="button"
-            onClick={reset}
-            className="inline-flex items-center gap-1.5 rounded-none bg-secondary px-3 py-1.5 text-xs font-medium hover:bg-secondary/80"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            新开一局
-          </button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              disabled={
+                status !== "play" ||
+                bar.length < 3 ||
+                flights.length > 0 ||
+                returnFlights.length > 0
+              }
+              title="将底栏前三张飞回牌面最底一行（辅助）"
+              onClick={moveBarFrontToDock}
+            >
+              <ArrowUpFromLine className="size-4" />
+              移出
+            </Button>
+            <Button variant="outline"
+              onClick={reset}
+            >
+              <RotateCcw className="size-4" />
+              新开一局
+            </Button>
+          </div>
+
         </div>
         <div
           className="relative flex min-h-[4.75rem] flex-wrap content-start gap-2 rounded-none bg-muted/50 p-2 [touch-action:manipulation]"
@@ -570,6 +769,9 @@ export function SheepTilesGame() {
           {bar.map((kind, i) => (
             <div
               key={`${i}-${kind}`}
+              ref={(el) => {
+                if (i < 3) barCellRefs.current[i] = el
+              }}
               className="relative h-12 w-12 shrink-0 overflow-visible rounded-lg bg-card [isolation:isolate]"
               style={{
                 boxShadow: liteFx ? SHADOW_BAR_LITE : SHADOW_BAR,
@@ -627,9 +829,55 @@ export function SheepTilesGame() {
               transform: moving
                 ? `translate3d(${dx}px, ${dy}px, 0) scale(${sx}, ${sy}) rotate(0deg)`
                 : `translate3d(0,0,0) scale(1,1) rotate(${fly.fromRot}deg)`,
-              transition: moving
-                ? "transform 0.38s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.38s ease"
-                : "none",
+              transitionProperty: moving ? "transform, box-shadow" : "none",
+              transitionDuration: moving ? "380ms, 380ms" : "0ms",
+              transitionTimingFunction: moving
+                ? "cubic-bezier(0.22, 1, 0.36, 1), ease"
+                : "ease",
+              transitionDelay: "0ms",
+              willChange: moving ? "transform" : "auto",
+              boxShadow: moving
+                ? liteFx
+                  ? SHADOW_FLY_END_LITE
+                  : SHADOW_FLY_END
+                : liteFx
+                  ? SHADOW_FLY_START_LITE
+                  : SHADOW_FLY_START,
+            }}
+          >
+            <SheepTileFace src={flySrc} liteFx={liteFx} />
+          </div>
+        )
+      })}
+
+      {returnFlights.map((fly) => {
+        const flySrc = SHEEP_TILE_IMAGES[fly.kind]?.src
+        if (!flySrc) return null
+        const dx = fly.to.left - fly.from.left
+        const dy = fly.to.top - fly.from.top
+        const sx = fly.to.width / fly.from.width
+        const sy = fly.to.height / fly.from.height
+        const moving = fly.moving
+        return (
+          <div
+            key={fly.id}
+            className="pointer-events-none fixed overflow-visible rounded-xl bg-card [isolation:isolate]"
+            style={{
+              zIndex: 10050 + fly.id,
+              left: fly.from.left,
+              top: fly.from.top,
+              width: fly.from.width,
+              height: fly.from.height,
+              transformOrigin: "0 0",
+              transform: moving
+                ? `translate3d(${dx}px, ${dy}px, 0) scale(${sx}, ${sy}) rotate(0deg)`
+                : "translate3d(0,0,0) scale(1,1) rotate(0deg)",
+              transitionProperty: moving ? "transform, box-shadow" : "none",
+              transitionDuration: moving ? "380ms, 380ms" : "0ms",
+              transitionTimingFunction: moving
+                ? "cubic-bezier(0.22, 1, 0.36, 1), ease"
+                : "ease",
+              transitionDelay: "0ms",
               willChange: moving ? "transform" : "auto",
               boxShadow: moving
                 ? liteFx
